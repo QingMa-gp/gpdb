@@ -6258,32 +6258,6 @@ make_setop(SetOpCmd cmd, SetOpStrategy strategy, Plan *lefttree,
 }
 
 /*
- * make_lockrows
- *	  Build a LockRows plan node
- */
-LockRows *
-make_lockrows(Plan *lefttree, List *rowMarks, int epqParam)
-{
-	LockRows   *node = makeNode(LockRows);
-	Plan	   *plan = &node->plan;
-
-	copy_plan_costsize(plan, lefttree);
-
-	/* charge cpu_tuple_cost to reflect locking costs (underestimate?) */
-	plan->total_cost += cpu_tuple_cost * plan->plan_rows;
-
-	plan->targetlist = lefttree->targetlist;
-	plan->qual = NIL;
-	plan->lefttree = lefttree;
-	plan->righttree = NULL;
-
-	node->rowMarks = rowMarks;
-	node->epqParam = epqParam;
-
-	return node;
-}
-
-/*
  * Note: offset_est and count_est are passed in to save having to repeat
  * work already done to estimate the values of the limitOffset and limitCount
  * expressions.  Their values are as returned by preprocess_limit (0 means

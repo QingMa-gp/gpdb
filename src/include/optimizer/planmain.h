@@ -196,7 +196,7 @@ extern WindowAgg *make_windowagg(PlannerInfo *root, List *tlist,
 extern Material *make_material(Plan *lefttree);
 extern Plan *materialize_finished_plan(PlannerInfo *root, Plan *subplan);
 extern Unique *make_unique(Plan *lefttree, List *distinctList);
-extern LockRows *make_lockrows(Plan *lefttree, List *rowMarks, int epqParam);
+
 extern Limit *make_limit(Plan *lefttree, Node *limitOffset, Node *limitCount,
 		   int64 offset_est, int64 count_est);
 extern SetOp *make_setop(SetOpCmd cmd, SetOpStrategy strategy, Plan *lefttree,
