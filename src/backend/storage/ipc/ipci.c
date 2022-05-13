@@ -78,25 +78,21 @@ int			shared_memory_type = DEFAULT_SHARED_MEMORY_TYPE;
 shmem_startup_hook_type shmem_startup_hook = NULL;
 
 static Size total_addin_request = 0;
-static bool addin_request_allowed = true;
-
 
 /*
  * RequestAddinShmemSpace
  *		Request that extra shmem space be allocated for use by
  *		a loadable module.
  *
- * This is only useful if called from the _PG_init hook of a library that
- * is loaded into the postmaster via shared_preload_libraries.  Once
- * shared memory has been allocated, calls will be ignored.  (We could
- * raise an error, but it seems better to make it a no-op, so that
- * libraries containing such calls can be reloaded if needed.)
+ * This may only be called via the shmem_request_hook of a library that is
+ * loaded into the postmaster via shared_preload_libraries.  Calls from
+ * elsewhere will fail.
  */
 void
 RequestAddinShmemSpace(Size size)
 {
-	if (IsUnderPostmaster || !addin_request_allowed)
-		return;					/* too late */
+	if (!process_shmem_requests_in_progress)
+		elog(FATAL, "cannot request additional shared memory outside shmem_request_hook");
 	total_addin_request = add_size(total_addin_request, size);
 }
 

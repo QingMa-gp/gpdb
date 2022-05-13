@@ -1625,6 +1625,9 @@ char	   *local_preload_libraries_string = NULL;
 /* Flag telling that we are loading shared_preload_libraries */
 bool		process_shared_preload_libraries_in_progress = false;
 
+shmem_request_hook_type shmem_request_hook = NULL;
+bool		process_shmem_requests_in_progress = false;
+
 /*
  * load the shared libraries listed in 'libraries'
  *
@@ -1707,6 +1710,18 @@ process_session_preload_libraries(void)
 	load_libraries(local_preload_libraries_string,
 				   "local_preload_libraries",
 				   true);
+}
+
+/*
+ * process any shared memory requests from preloaded libraries
+ */
+void
+process_shmem_requests(void)
+{
+	process_shmem_requests_in_progress = true;
+	if (shmem_request_hook)
+		shmem_request_hook();
+	process_shmem_requests_in_progress = false;
 }
 
 void
