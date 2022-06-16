@@ -497,7 +497,7 @@ cdbdisp_dispatchCommandInternal(DispatchCommandQueryParms *pQueryParms,
 	 * To fix this issue, we should drop the idle reader gangs after each
 	 * utility statement which may modify the catalog table.
 	 */
-	ds->destroyIdleReaderGang = true;
+	//ds->destroyIdleReaderGang = true;
 
 	queryText = buildGpQueryString(pQueryParms, &queryTextLength);
 

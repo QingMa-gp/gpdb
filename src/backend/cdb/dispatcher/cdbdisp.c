@@ -330,7 +330,7 @@ cdbdisp_makeDispatcherState(bool isExtendedQuery)
 	handle->dispatcherState->allocatedGangs = NIL;
 	handle->dispatcherState->largestGangSize = 0;
 	handle->dispatcherState->rootGangSize = 0;
-	handle->dispatcherState->destroyIdleReaderGang = false;
+	//handle->dispatcherState->destroyIdleReaderGang = false;
 
 	return handle->dispatcherState;
 }
@@ -410,8 +410,8 @@ cdbdisp_destroyDispatcherState(CdbDispatcherState *ds)
 	/*
 	 * Destroy all the idle reader gangs when flag destroyIdleReaderGang is true
 	 */
-	if (ds->destroyIdleReaderGang)
-		cdbcomponent_cleanupIdleQEs(false);
+	//if (ds->destroyIdleReaderGang)
+		//cdbcomponent_cleanupIdleQEs(false);
 
 	ds->allocatedGangs = NIL;
 	ds->dispatchParams = NULL;
