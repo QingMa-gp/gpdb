@@ -2547,6 +2547,17 @@ ExecModifyTable(PlanState *pstate)
 				if (proute)
 					slot = ExecPrepareTupleRouting(node, estate, proute,
 												   resultRelInfo, slot);
+				if (node->splitInsertRelInfos)
+				{
+					slot_getallattrs(planSlot);
+					int idx = DatumGetInt32(planSlot->tts_values[planSlot->tts_tupleDescriptor->natts - 1]);
+					if (idx == 1) 
+					{
+						estate->es_result_relation_info = node->resultRelInfo;
+					} else {
+						estate->es_result_relation_info = list_nth(node->splitInsertRelInfos, idx - 2);
+					}
+				}
 				slot = ExecInsert(node, slot, planSlot,
 								  estate, node->canSetTag, false /* splitUpdate */);
 				/* Revert ExecPrepareTupleRouting's state change. */
@@ -2793,7 +2804,30 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 		(operation == CMD_INSERT || update_tuple_routing_needed))
 		mtstate->mt_partition_tuple_routing =
 			ExecSetupPartitionTupleRouting(estate, mtstate, rel);
-
+	
+	/* TODO: xxx */
+	if (operation == CMD_INSERT) 
+	{
+		Assert(list_length(node->plans) == 1);
+		if (IsA(linitial(node->plans), SplitInsert))
+		{
+			SplitInsert *si = (SplitInsert *) linitial(node->plans);
+			ListCell *lc;
+			foreach(lc, si->insertTargetRelid)
+			{
+				ResultRelInfo *rri;
+				Oid relid = lfirst_oid(lc);
+				Relation rel = table_open(relid, RowExclusiveLock);
+				rri = makeNode(ResultRelInfo);
+				InitResultRelInfo(rri,
+								  rel,
+								  0,
+								  NULL,
+								  estate->es_instrument);
+				mtstate->splitInsertRelInfos = lappend(mtstate->splitInsertRelInfos, rri);
+			}
+		}
+	}
 	/*
 	 * Build state for collecting transition tuples.  This requires having a
 	 * valid trigger query context, so skip it in explain-only mode.
@@ -3223,6 +3257,16 @@ ExecEndModifyTable(ModifyTableState *node)
 	 */
 	for (i = 0; i < node->mt_nplans; i++)
 		ExecEndNode(node->mt_plans[i]);
+
+	if (node->splitInsertRelInfos)
+	{
+		ListCell *lc;
+		foreach(lc, node->splitInsertRelInfos)
+		{
+			ResultRelInfo *rri = (ResultRelInfo *)lfirst(lc);
+			table_close(rri->ri_RelationDesc, NoLock);
+		}
+	}
 }
 
 void

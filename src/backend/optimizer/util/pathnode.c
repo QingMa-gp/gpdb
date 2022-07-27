@@ -5317,9 +5317,11 @@ adjust_modifytable_subpaths(PlannerInfo *root, CmdType operation,
 
 		if (operation == CMD_INSERT)
 		{
+			subpath = create_motion_path_for_insert(root, targetPolicy, subpath);
+
 			if (root->parse->multi_insert_result_relations)
 				subpath = create_split_insert_path(root, targetPolicy, subpath, rti);
-			subpath = create_motion_path_for_insert(root, targetPolicy, subpath);
+
 		}
 		else if (operation == CMD_DELETE)
 		{
