@@ -2543,10 +2543,7 @@ ExecModifyTable(PlanState *pstate)
 		switch (operation)
 		{
 			case CMD_INSERT:
-				/* Prepare for tuple routing if needed. */
-				if (proute)
-					slot = ExecPrepareTupleRouting(node, estate, proute,
-												   resultRelInfo, slot);
+
 				if (node->splitInsertRelInfos)
 				{
 					slot_getallattrs(planSlot);
@@ -2556,8 +2553,14 @@ ExecModifyTable(PlanState *pstate)
 						estate->es_result_relation_info = node->resultRelInfo;
 					} else {
 						estate->es_result_relation_info = list_nth(node->splitInsertRelInfos, idx - 2);
+						proute= list_nth(node->splitInsertPartRoutings, idx - 2);
+
 					}
 				}
+				/* Prepare for tuple routing if needed. */
+				if (proute)
+					slot = ExecPrepareTupleRouting(node, estate, proute,
+												   estate->es_result_relation_info, slot);
 				slot = ExecInsert(node, slot, planSlot,
 								  estate, node->canSetTag, false /* splitUpdate */);
 				/* Revert ExecPrepareTupleRouting's state change. */
@@ -2825,6 +2828,15 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 								  NULL,
 								  estate->es_instrument);
 				mtstate->splitInsertRelInfos = lappend(mtstate->splitInsertRelInfos, rri);
+				if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+				{
+					PartitionTupleRouting *part_routing = ExecSetupPartitionTupleRouting(estate, mtstate, rel);
+					mtstate->splitInsertPartRoutings = lappend(mtstate->splitInsertPartRoutings, part_routing);
+				} 
+				else
+				{
+					mtstate->splitInsertPartRoutings = lappend(mtstate->splitInsertPartRoutings, NULL);
+				}
 			}
 		}
 	}
@@ -3260,10 +3272,11 @@ ExecEndModifyTable(ModifyTableState *node)
 
 	if (node->splitInsertRelInfos)
 	{
-		ListCell *lc;
-		foreach(lc, node->splitInsertRelInfos)
+		for (i = 0; i < list_length(node->splitInsertRelInfos); i++)
 		{
-			ResultRelInfo *rri = (ResultRelInfo *)lfirst(lc);
+			ResultRelInfo *rri = (ResultRelInfo *) list_nth(node->splitInsertRelInfos, i);
+			if (rri->ri_RelationDesc->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+				ExecCleanupTupleRouting(node, list_nth(node->splitInsertPartRoutings, i));
 			table_close(rri->ri_RelationDesc, NoLock);
 		}
 	}

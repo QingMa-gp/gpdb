@@ -1249,6 +1249,7 @@ typedef struct ModifyTableState
 	TupleConversionMap **mt_per_subplan_tupconv_maps;
 	
 	List *splitInsertRelInfos;
+	List *splitInsertPartRoutings;
 } ModifyTableState;
 
 /* ----------------
