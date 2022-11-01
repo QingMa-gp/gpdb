@@ -109,6 +109,7 @@ static void llvm_session_initialize(void);
 static void llvm_shutdown(int code, Datum arg);
 static void llvm_compile_module(LLVMJitContext *context);
 static void llvm_optimize_module(LLVMJitContext *context, LLVMModuleRef module);
+static void llvm_compile_modules();
 
 static void llvm_create_types(void);
 static uint64_t llvm_resolve_symbol(const char *name, void *ctx);
@@ -126,6 +127,7 @@ _PG_jit_provider_init(JitProviderCallbacks *cb)
 	cb->reset_after_error = llvm_reset_after_error;
 	cb->release_context = llvm_release_context;
 	cb->compile_expr = llvm_compile_expr;
+	cb->compile_modules = llvm_compile_modules;
 }
 
 /*
@@ -916,4 +918,14 @@ llvm_resolve_symbol(const char *symname, void *ctx)
 		jit_elog(WARNING, "failed to resolve name %s", symname);
 
 	return (uint64_t) addr;
+}
+
+static void llvm_compile_modules()
+{
+	ListCell *lc;
+	foreach(lc, jit_contexts)
+	{
+		LLVMJitContext *context = lfirst(lc);
+		llvm_compile_module(context);
+	}
 }

@@ -69,12 +69,14 @@ typedef void (*JitProviderResetAfterErrorCB) (void);
 typedef void (*JitProviderReleaseContextCB) (JitContext *context);
 struct ExprState;
 typedef bool (*JitProviderCompileExprCB) (struct ExprState *state);
+typedef void (*JITProviderCompileAllModules) (void);
 
 struct JitProviderCallbacks
 {
 	JitProviderResetAfterErrorCB reset_after_error;
 	JitProviderReleaseContextCB release_context;
 	JitProviderCompileExprCB compile_expr;
+	JITProviderCompileAllModules compile_modules;
 };
 
 
@@ -90,6 +92,7 @@ extern double jit_above_cost;
 extern double jit_inline_above_cost;
 extern double jit_optimize_above_cost;
 
+extern List* jit_contexts;
 
 extern void jit_reset_after_error(void);
 extern void jit_release_context(JitContext *context);
@@ -100,6 +103,7 @@ extern void jit_release_context(JitContext *context);
  */
 extern bool jit_compile_expr(struct ExprState *state);
 extern void InstrJitAgg(JitInstrumentation *dst, JitInstrumentation *add);
+extern void jit_compile_all_modules();
 
 #define jit_elog(elevel, fmt, ...) elog(elevel, "JIT: " fmt, ##__VA_ARGS__)
 

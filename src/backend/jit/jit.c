@@ -47,7 +47,7 @@ static JitProviderCallbacks provider;
 static bool provider_successfully_loaded = false;
 static bool provider_failed_loading = false;
 
-
+List* jit_contexts;
 static bool provider_init(void);
 static bool file_exists(const char *name);
 
@@ -139,6 +139,12 @@ jit_reset_after_error(void)
 void
 jit_release_context(JitContext *context)
 {
+	if (jit_contexts)
+	{
+		list_free(jit_contexts);
+		jit_contexts = NULL;
+	}
+
 	if (provider_successfully_loaded)
 		provider.release_context(context);
 
@@ -207,4 +213,10 @@ file_exists(const char *name)
 				 errmsg("JIT: could not access file \"%s\": %m", name)));
 
 	return false;
+}
+
+void jit_compile_all_modules()
+{
+	if (provider_init())
+		provider.compile_modules();
 }

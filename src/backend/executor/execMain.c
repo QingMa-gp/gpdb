@@ -580,6 +580,9 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 		Assert(CurrentMemoryContext == estate->es_query_cxt);
 		InitPlan(queryDesc, eflags);
 
+		if (jit_contexts)
+			jit_compile_all_modules();
+
 		Assert(queryDesc->planstate);
 
 #ifdef USE_ASSERT_CHECKING

@@ -2592,6 +2592,19 @@ llvm_compile_expr(ExprState *state)
 		state->evalfunc_private = cstate;
 	}
 
+	{
+		bool isExist = false;
+		ListCell *lc;
+		foreach(lc, jit_contexts)
+		{
+			LLVMJitContext *jitContext = lfirst(lc);
+			if (jitContext == context)
+				isExist = true;
+		}
+		if (!isExist)
+			jit_contexts = (List *) lappend(jit_contexts, context);
+	}
+
 	llvm_leave_fatal_on_oom();
 
 	INSTR_TIME_SET_CURRENT(endtime);
