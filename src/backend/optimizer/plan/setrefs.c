@@ -2391,13 +2391,10 @@ convert_combining_aggrefs(Node *node, void *split)
 				memcpy(parent_agg, orig_agg, sizeof(Aggref));
 
 				parent_agg->aggdistinct = NIL;
-				parent_agg->aggsplit = AGGSPLIT_SIMPLE;
+				parent_agg->aggsplit = DO_AGGSPLIT_SKIPFINAL(aggsplit) ?
+										AGGSPLIT_INITIAL_SERIAL : AGGSPLIT_SIMPLE;
 
 				return (Node *) parent_agg;
-			}
-			else
-			{
-				aggsplit = AGGSPLIT_FINAL_DESERIAL;
 			}
 		}
 

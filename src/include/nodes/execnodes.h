@@ -2537,6 +2537,7 @@ typedef struct TupleSplitState
 	 * Only the input AttrNum in the bitmap set, other column set to null
 	 */
 	Bitmapset       **dqa_split_bms;
+	Bitmapset       **agg_vars_ref;
 
 	ExprState       **agg_filter_array; /* DQA filter which push down from aggref */
 	int             *dqa_id_array; /* DQA id for each each split tuple */

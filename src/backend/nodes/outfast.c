@@ -895,11 +895,7 @@ _outCreateAmStmt(StringInfo str, const CreateAmStmt *node)
 	WRITE_NODE_FIELD(handler_name);
 	WRITE_INT_FIELD(amtype);
 }
-static void
-_outAggExprId(StringInfo str, const AggExprId *node)
-{
-	WRITE_NODE_TYPE("AGGEXPRID");
-}
+
 static void
 _outRowIdExpr(StringInfo str, const RowIdExpr *node)
 {

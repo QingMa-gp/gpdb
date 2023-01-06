@@ -1057,6 +1057,7 @@ _outDQAExpr(StringInfo str, const DQAExpr *node)
     WRITE_INT_FIELD(agg_expr_id);
     WRITE_BITMAPSET_FIELD(agg_args_id_bms);
     WRITE_NODE_FIELD(agg_filter);
+	WRITE_BITMAPSET_FIELD(agg_vars_ref);
 }
 
 static void
@@ -1568,6 +1569,12 @@ _outGroupingSetId(StringInfo str, const GroupingSetId *node)
 	WRITE_NODE_TYPE("GROUPINGSETID");
 
 	WRITE_LOCATION_FIELD(location);
+}
+
+static void
+_outAggExprId(StringInfo str, const AggExprId *node)
+{
+	WRITE_NODE_TYPE("AGGEXPRID");
 }
 
 static void
@@ -5719,6 +5726,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_GroupingSetId:
 				_outGroupingSetId(str, obj);
+				break;
+			case T_AggExprId:
+				_outAggExprId(str, obj);
 				break;
 			case T_WindowFunc:
 				_outWindowFunc(str, obj);
