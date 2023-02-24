@@ -1735,9 +1735,14 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 							 RelOptInfo *output_rel,
 							 cdb_multi_dqas_info *info)
 {
-	List	   *dqa_group_tles;
-	CdbPathLocus distinct_locus;
-	bool		distinct_need_redistribute;
+	List			*dqa_group_tles;
+	List			*group_tles;
+	CdbPathLocus 	distinct_locus;
+	CdbPathLocus	group_locus;
+	bool			distinct_need_redistribute;
+	bool			group_need_redistribute;
+	double			num_groups;
+	double			dnum_groups;
 
 	/*
 	 * If subpath is projection capable, we do not want to generate a
@@ -1747,76 +1752,33 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	 */
 	path = apply_projection_to_path(root, path->parent, path, info->input_proj_target);
 
-	/*
-	 * Finalize Aggregate
-	 *   -> Gather Motion
-	 *        -> Partial Aggregate
-	 *             -> HashAggregate, to remote duplicates
-	 *                  -> Redistribute Motion
-	 *                       -> TupleSplit (according to DISTINCT expr)
-	 *                            -> input
-	 */
-	path = (Path *) create_tup_split_path(root,
-										  output_rel,
-										  path,
-										  info->tup_split_target,
-										  ctx->groupClause,
-										  info->dqa_expr_lst);
+	group_tles = get_common_group_tles(info->tup_split_target, ctx->groupClause, NIL);
+	group_locus = choose_grouping_locus(root, path, group_tles,
+										&group_need_redistribute);
+	dnum_groups = estimate_num_groups_on_segment(info->dNumDistinctGroups, path->rows, path->locus);
 
-	AggClauseCosts DedupCost = {};
-	get_agg_clause_costs(root, (Node *) info->tup_split_target->exprs,
-						 AGGSPLIT_SIMPLE,
-						 &DedupCost);
+	if (CdbPathLocus_IsPartitioned(group_locus))
+		num_groups = clamp_row_est(ctx->dNumGroupsTotal /
+								   CdbPathLocus_NumSegments(path->locus));
+	else
+		num_groups = ctx->dNumGroupsTotal;
 
-	if (gp_enable_dqa_pruning)
+	if (!group_need_redistribute)
 	{
 		/*
-		 * If we are grouping, we charge an additional cpu_operator_cost per
-		 * **grouping column** per input tuple for grouping comparisons.
-		 *
-		 * But in the tuple split case, other columns not for this DQA are
-		 * NULLs, the actual cost is way less than the number calculating based
-		 * on the length of grouping clause.
-		 *
-		 * So here we create a dummy grouping clause whose length is 1 (the
-		 * most common case of DQA), use it to calculate the cost, then set the
-		 * actual one back into the path.
+		 * If the input's locus matches the GROUP BY:
+		 *  HashAggregate (to aggregate)
+		 *      -> HashAggregate (to eliminate duplicates)
+		 *          -> TupleSplit (according to DISTINCT expr)
+		 *              -> input
 		 */
-		List *dummy_group_clause = list_make1(list_head(info->dqa_group_clause));
+		path = (Path *) create_tup_split_path(root,
+											  output_rel,
+											  path,
+											  info->tup_split_target,
+											  ctx->groupClause,
+											  info->dqa_expr_lst);
 
-		path = (Path *) create_agg_path(root,
-										output_rel,
-										path,
-										info->tup_split_target,
-										AGG_HASHED,
-										AGGSPLIT_SIMPLE,
-										true, /* streaming */
-										dummy_group_clause, /* only its length 1 is being used here */
-										NIL,
-										&DedupCost,
-										estimate_num_groups_on_segment(info->dNumDistinctGroups,
-																	   path->rows, path->locus));
-
-		/* set the actual group clause back */
-		((AggPath *)path)->groupClause = info->dqa_group_clause;
-	}
-
-	dqa_group_tles = get_common_group_tles(info->tup_split_target,
-										   info->dqa_group_clause, NIL);
-	distinct_locus = choose_grouping_locus(root, path, dqa_group_tles,
-										   &distinct_need_redistribute);
-
-	if (distinct_need_redistribute)
-		path = cdbpath_create_motion_path(root, path, NIL, false,
-										  distinct_locus);
-
-	AggStrategy split = AGG_PLAIN;
-	unsigned long DEDUPLICATED_FLAG = 0;
-	PathTarget *partial_target = info->partial_target;
-	double		input_rows = path->rows;
-
-	if (ctx->groupClause)
-	{
 		path = (Path *) create_agg_path(root,
 										output_rel,
 										path,
@@ -1826,48 +1788,211 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 										false, /* streaming */
 										info->dqa_group_clause,
 										NIL,
-										&DedupCost,
-										clamp_row_est(info->dNumDistinctGroups / CdbPathLocus_NumSegments(distinct_locus)));
+										ctx->agg_partial_costs, 
+										dnum_groups);
 
-		split = AGG_HASHED;
-		DEDUPLICATED_FLAG = AGGSPLITOP_DEDUPLICATED;
-		partial_target = strip_aggdistinct(info->partial_target);
+		path = (Path *) create_agg_path(root,
+										output_rel,
+										path,
+										ctx->target,
+										ctx->groupClause ? AGG_HASHED : AGG_PLAIN,
+										AGGSPLIT_DEDUPLICATED,
+										false, /* streaming */
+										ctx->groupClause,
+										ctx->havingQual,
+										ctx->agg_final_costs,
+										num_groups);
+		add_path(output_rel, path);
 	}
+	else if (CdbPathLocus_IsHashed(group_locus))
+	{
+		/*
+		 *  HashAgg (to aggregate)
+		 *     -> HashAgg (to eliminate duplicates)
+		 *          -> Redistribute (according to GROUP BY)
+		 *               -> Streaming HashAgg (to eliminate duplicates)
+		 *                    -> input
+		 */
+		path = (Path *) create_tup_split_path(root,
+											  output_rel,
+											  path,
+											  info->tup_split_target,
+											  ctx->groupClause,
+											  info->dqa_expr_lst);
 
-	path = (Path *) create_agg_path(root,
-									output_rel,
-									path,
-									partial_target,
-									split,
-									AGGSPLIT_INITIAL_SERIAL | DEDUPLICATED_FLAG,
-									false, /* streaming */
-									ctx->groupClause,
-									NIL,
-									ctx->agg_partial_costs,
-									estimate_num_groups_on_segment(ctx->dNumGroupsTotal,
-																   input_rows, path->locus));
+		if (gp_enable_dqa_pruning)
+		{
+			AggClauseCosts DedupCost = {};
+			get_agg_clause_costs(root, (Node *) info->tup_split_target->exprs,
+								 AGGSPLIT_SIMPLE,
+								 &DedupCost);
+			/*
+			* If we are grouping, we charge an additional cpu_operator_cost per
+			* **grouping column** per input tuple for grouping comparisons.
+			*
+			* But in the tuple split case, other columns not for this DQA are
+			* NULLs, the actual cost is way less than the number calculating based
+			* on the length of grouping clause.
+			*
+			* So here we create a dummy grouping clause whose length is 1 (the
+			* most common case of DQA), use it to calculate the cost, then set the
+			* actual one back into the path.
+			*/
+			List *dummy_group_clause = list_make1(list_head(info->dqa_group_clause));
 
-	CdbPathLocus singleQE_locus;
-	CdbPathLocus_MakeSingleQE(&singleQE_locus, getgpsegmentCount());
-	path = cdbpath_create_motion_path(root,
-									  path,
-									  NIL,
-									  false,
-									  singleQE_locus);
+			path = (Path *) create_agg_path(root,
+											output_rel,
+											path,
+											info->tup_split_target,
+											AGG_HASHED,
+											AGGSPLIT_SIMPLE,
+											true, /* streaming */
+											dummy_group_clause, /* only its length 1 is being used here */
+											NIL,
+											&DedupCost,
+											dnum_groups);
 
-	path = (Path *) create_agg_path(root,
-									output_rel,
-									path,
-									info->final_target,
-									split,
-									AGGSPLIT_FINAL_DESERIAL | DEDUPLICATED_FLAG,
-									false, /* streaming */
-									ctx->groupClause,
-									ctx->havingQual,
-									ctx->agg_final_costs,
-									ctx->dNumGroupsTotal);
+			/* set the actual group clause back */
+			((AggPath *)path)->groupClause = info->dqa_group_clause;
+		}
 
-	add_path(output_rel, path);
+		path = cdbpath_create_motion_path(root, path, NIL, false,
+										  group_locus);
+
+		path = (Path *) create_agg_path(root,
+										output_rel,
+										path,
+										info->tup_split_target,
+										AGG_HASHED,
+										AGGSPLIT_SIMPLE,
+										false, /* streaming */
+										info->dqa_group_clause,
+										NIL,
+										ctx->agg_partial_costs, 
+										dnum_groups);
+
+		path = (Path *) create_agg_path(root,
+										output_rel,
+										path,
+										ctx->target,
+										ctx->groupClause ? AGG_HASHED : AGG_PLAIN,
+										AGGSPLIT_DEDUPLICATED,
+										false, /* streaming */
+										ctx->groupClause,
+										ctx->havingQual,
+										ctx->agg_final_costs,
+										num_groups);
+		add_path(output_rel, path);
+	}
+	else
+	{
+		path = (Path *) create_tup_split_path(root,
+											  output_rel,
+											  path,
+											  info->tup_split_target,
+											  ctx->groupClause,
+											  info->dqa_expr_lst);
+
+		if (gp_enable_dqa_pruning)
+		{
+			AggClauseCosts DedupCost = {};
+			get_agg_clause_costs(root, (Node *) info->tup_split_target->exprs,
+								 AGGSPLIT_SIMPLE,
+								 &DedupCost);
+
+			/*
+			* If we are grouping, we charge an additional cpu_operator_cost per
+			* **grouping column** per input tuple for grouping comparisons.
+			*
+			* But in the tuple split case, other columns not for this DQA are
+			* NULLs, the actual cost is way less than the number calculating based
+			* on the length of grouping clause.
+			*
+			* So here we create a dummy grouping clause whose length is 1 (the
+			* most common case of DQA), use it to calculate the cost, then set the
+			* actual one back into the path.
+			*/
+			List *dummy_group_clause = list_make1(list_head(info->dqa_group_clause));
+
+			path = (Path *) create_agg_path(root,
+											output_rel,
+											path,
+											info->tup_split_target,
+											AGG_HASHED,
+											AGGSPLIT_SIMPLE,
+											true, /* streaming */
+											dummy_group_clause, /* only its length 1 is being used here */
+											NIL,
+											&DedupCost,
+											dnum_groups);
+
+			/* set the actual group clause back */
+			((AggPath *)path)->groupClause = info->dqa_group_clause;
+		}
+
+		dqa_group_tles = get_common_group_tles(info->tup_split_target,
+											   info->dqa_group_clause, NIL);
+		distinct_locus = choose_grouping_locus(root, path, dqa_group_tles,
+											   &distinct_need_redistribute);
+		path = cdbpath_create_motion_path(root, path, NIL, false,
+										  distinct_locus);
+
+		AggStrategy split = AGG_PLAIN;
+		unsigned long DEDUPLICATED_FLAG = 0;
+		PathTarget *partial_target = info->partial_target;
+
+		if (ctx->groupClause)
+		{
+			path = (Path *) create_agg_path(root,
+											output_rel,
+											path,
+											info->tup_split_target,
+											AGG_HASHED,
+											AGGSPLIT_SIMPLE,
+											false, /* streaming */
+											info->dqa_group_clause,
+											NIL,
+											ctx->agg_partial_costs,
+											dnum_groups);
+
+			split = AGG_HASHED;
+			DEDUPLICATED_FLAG = AGGSPLITOP_DEDUPLICATED;
+			partial_target = strip_aggdistinct(info->partial_target);
+		}
+
+		path = (Path *) create_agg_path(root,
+										output_rel,
+										path,
+										partial_target,
+										split,
+										AGGSPLIT_INITIAL_SERIAL | DEDUPLICATED_FLAG,
+										false, /* streaming */
+										ctx->groupClause,
+										NIL,
+										ctx->agg_partial_costs,
+										dnum_groups);
+
+		CdbPathLocus singleQE_locus;
+		CdbPathLocus_MakeSingleQE(&singleQE_locus, getgpsegmentCount());
+		path = cdbpath_create_motion_path(root,
+										  path,
+										  NIL,
+										  false,
+										  singleQE_locus);
+
+		path = (Path *) create_agg_path(root,
+										output_rel,
+										path,
+										info->final_target,
+										split,
+										AGGSPLIT_FINAL_DESERIAL | DEDUPLICATED_FLAG,
+										false, /* streaming */
+										ctx->groupClause,
+										ctx->havingQual,
+										ctx->agg_final_costs,
+										num_groups);
+		add_path(output_rel, path);
+	}
 }
 
 static void
@@ -1878,8 +2003,13 @@ add_multi_mixed_dqas_hash_agg_path(PlannerInfo *root,
 							cdb_multi_dqas_info *info)
 {
 	List			*dqa_group_tles;
+	List			*group_tles;
 	CdbPathLocus 	distinct_locus;
+	CdbPathLocus	group_locus;
 	bool			distinct_need_redistribute;
+	bool			group_need_redistribute;
+	double			num_groups;
+	double			dnum_groups;
 
 	/*
 	 * If subpath is projection capable, we do not want to generate a
@@ -1889,40 +2019,36 @@ add_multi_mixed_dqas_hash_agg_path(PlannerInfo *root,
 	 */
 	path = apply_projection_to_path(root, path->parent, path, info->input_proj_target);
 
-	/*
-	 * Finalize Aggregate
-	 *   -> Gather Motion
-	 * 		-> HashAggregate, to remote duplicates
-	 *     		-> Redistribute Motion
-	 *       		-> TupleSplit (according to DISTINCT expr)
-	 *             		-> input
-	 */
-	path = (Path *) create_tup_split_path(root,
-										  output_rel,
-										  path,
-										  info->tup_split_target,
-										  ctx->groupClause,
-										  info->dqa_expr_lst);
+	group_tles = get_common_group_tles(info->tup_split_target, ctx->groupClause, NIL);
+	group_locus = choose_grouping_locus(root, path, group_tles,
+										&group_need_redistribute);
+	dqa_group_tles = get_common_group_tles(info->tup_split_target,
+										   info->dqa_group_clause, NIL);
+	distinct_locus = choose_grouping_locus(root, path, dqa_group_tles,
+										   &distinct_need_redistribute);
+	dnum_groups = estimate_num_groups_on_segment(info->dNumDistinctGroups, path->rows, path->locus);
 
-	if (gp_enable_dqa_pruning)
+	if (CdbPathLocus_IsPartitioned(group_locus))
+		num_groups = clamp_row_est(ctx->dNumGroupsTotal /
+								   CdbPathLocus_NumSegments(path->locus));
+	else
+		num_groups = ctx->dNumGroupsTotal;
+
+	if (!group_need_redistribute)
 	{
-		AggClauseCosts DedupCost = {};
-		get_agg_clause_costs(root, (Node *) info->tup_split_target->exprs,
-							AGGSPLIT_SIMPLE,
-							&DedupCost);
 		/*
-		 * If we are grouping, we charge an additional cpu_operator_cost per
-		 * **grouping column** per input tuple for grouping comparisons.
-		 *
-		 * But in the tuple split case, other columns not for this DQA are
-		 * NULLs, the actual cost is way less than the number calculating based
-		 * on the length of grouping clause.
-		 *
-		 * So here we create a dummy grouping clause whose length is 1 (the
-		 * most common case of DQA), use it to calculate the cost, then set the
-		 * actual one back into the path.
+		 * If the input's locus matches the GROUP BY:
+		 *  HashAggregate (to aggregate)
+		 *      -> HashAggregate (to eliminate duplicates)
+		 *          -> TupleSplit (according to DISTINCT expr)
+		 *              -> input
 		 */
-		List *dummy_group_clause = list_make1(list_head(info->dqa_group_clause));
+		path = (Path *) create_tup_split_path(root,
+											  output_rel,
+											  path,
+											  info->tup_split_target,
+											  ctx->groupClause,
+											  info->dqa_expr_lst);
 
 		path = (Path *) create_agg_path(root,
 										output_rel,
@@ -1930,73 +2056,201 @@ add_multi_mixed_dqas_hash_agg_path(PlannerInfo *root,
 										info->partial_target,
 										AGG_HASHED,
 										AGGSPLIT_INITIAL_SERIAL,
-										true, /* streaming */
-										dummy_group_clause, /* only its length 1 is being used here */
+										false, /* streaming */
+										info->dqa_group_clause,
 										NIL,
-										&DedupCost,
-										estimate_num_groups_on_segment(info->dNumDistinctGroups,
-																	   path->rows, path->locus));
+										ctx->agg_partial_costs,
+										dnum_groups);
 
-		/* set the actual group clause back */
-		((AggPath *)path)->groupClause = info->dqa_group_clause;
+		path = (Path *) create_agg_path(root,
+										output_rel,
+										path,
+										ctx->target,
+										ctx->groupClause ? AGG_HASHED : AGG_PLAIN,
+										AGGSPLIT_FINAL_DESERIAL | AGGSPLIT_DQAWITHAGG,
+										false, /* streaming */
+										ctx->groupClause,
+										ctx->havingQual,
+										ctx->agg_final_costs,
+										num_groups);
+		add_path(output_rel, path);
 	}
+	else if (CdbPathLocus_IsHashed(group_locus))
+	{
+		/*
+		 *  HashAgg (to aggregate)
+		 *     -> HashAgg (to eliminate duplicates)
+		 *          -> Redistribute (according to GROUP BY)
+		 *               -> Streaming HashAgg (to eliminate duplicates)
+		 *                    -> input
+		 *
+		 */
 
-	dqa_group_tles = get_common_group_tles(info->tup_split_target,
-										   info->dqa_group_clause, NIL);
-	distinct_locus = choose_grouping_locus(root, path, dqa_group_tles,
-										   &distinct_need_redistribute);
+		path = (Path *) create_tup_split_path(root,
+											  output_rel,
+											  path,
+											  info->tup_split_target,
+											  ctx->groupClause,
+											  info->dqa_expr_lst);
 
-	if (distinct_need_redistribute)
+		if (gp_enable_dqa_pruning)
+		{
+			AggClauseCosts DedupCost = {};
+			get_agg_clause_costs(root, (Node *) info->tup_split_target->exprs,
+								AGGSPLIT_SIMPLE,
+								&DedupCost);
+			/*
+			* If we are grouping, we charge an additional cpu_operator_cost per
+			* **grouping column** per input tuple for grouping comparisons.
+			*
+			* But in the tuple split case, other columns not for this DQA are
+			* NULLs, the actual cost is way less than the number calculating based
+			* on the length of grouping clause.
+			*
+			* So here we create a dummy grouping clause whose length is 1 (the
+			* most common case of DQA), use it to calculate the cost, then set the
+			* actual one back into the path.
+			*/
+			List *dummy_group_clause = list_make1(list_head(info->dqa_group_clause));
+
+			path = (Path *) create_agg_path(root,
+											output_rel,
+											path,
+											info->partial_target,
+											AGG_HASHED,
+											AGGSPLIT_INITIAL_SERIAL,
+											true, /* streaming */
+											dummy_group_clause, /* only its length 1 is being used here */
+											NIL,
+											&DedupCost,
+											dnum_groups);
+
+			/* set the actual group clause back */
+			((AggPath *)path)->groupClause = info->dqa_group_clause;
+		}
+
+		path = cdbpath_create_motion_path(root, path, NIL, false,
+										  group_locus);
+
+		path = (Path *) create_agg_path(root,
+										output_rel,
+										path,
+										info->partial_target,
+										AGG_HASHED,
+										gp_enable_dqa_pruning ? AGGSPLIT_INTERMEDIATE : AGGSPLIT_INITIAL_SERIAL,
+										false, /* streaming */
+										info->dqa_group_clause,
+										NIL,
+										ctx->agg_partial_costs, /* FIXME */
+										dnum_groups);
+
+		path = (Path *) create_agg_path(root,
+										output_rel,
+										path,
+										ctx->target,
+										ctx->groupClause ? AGG_HASHED : AGG_PLAIN,
+										AGGSPLIT_FINAL_DESERIAL | AGGSPLIT_DQAWITHAGG,
+										false, /* streaming */
+										ctx->groupClause,
+										ctx->havingQual,
+										ctx->agg_final_costs,
+										num_groups);
+		add_path(output_rel, path);
+	}
+	else
+	{
+		path = (Path *) create_tup_split_path(root,
+											  output_rel,
+											  path,
+											  info->tup_split_target,
+											  ctx->groupClause,
+											  info->dqa_expr_lst);
+
+		if (gp_enable_dqa_pruning)
+		{
+			AggClauseCosts DedupCost = {};
+			get_agg_clause_costs(root, (Node *) info->tup_split_target->exprs,
+								 AGGSPLIT_SIMPLE,
+								 &DedupCost);
+			/*
+			* If we are grouping, we charge an additional cpu_operator_cost per
+			* **grouping column** per input tuple for grouping comparisons.
+			*
+			* But in the tuple split case, other columns not for this DQA are
+			* NULLs, the actual cost is way less than the number calculating based
+			* on the length of grouping clause.
+			*
+			* So here we create a dummy grouping clause whose length is 1 (the
+			* most common case of DQA), use it to calculate the cost, then set the
+			* actual one back into the path.
+			*/
+			List *dummy_group_clause = list_make1(list_head(info->dqa_group_clause));
+
+			path = (Path *) create_agg_path(root,
+											output_rel,
+											path,
+											info->partial_target,
+											AGG_HASHED,
+											AGGSPLIT_INITIAL_SERIAL,
+											true, /* streaming */
+											dummy_group_clause, /* only its length 1 is being used here */
+											NIL,
+											&DedupCost,
+											dnum_groups);
+
+			/* set the actual group clause back */
+			((AggPath *)path)->groupClause = info->dqa_group_clause;
+		}
+
 		path = cdbpath_create_motion_path(root, path, NIL, false,
 										  distinct_locus);
 
-	path = (Path *) create_agg_path(root,
-									output_rel,
-									path,
-									info->partial_target,
-									AGG_HASHED,
-									gp_enable_dqa_pruning ? AGGSPLIT_INTERMEDIATE : AGGSPLIT_INITIAL_SERIAL,
-									false, /* streaming */
-									info->dqa_group_clause,
-									NIL,
-									ctx->agg_partial_costs,
-									estimate_num_groups_on_segment(ctx->dNumGroupsTotal,
-																   path->rows, path->locus));
+		path = (Path *) create_agg_path(root,
+										output_rel,
+										path,
+										info->partial_target,
+										AGG_HASHED,
+										gp_enable_dqa_pruning ? AGGSPLIT_INTERMEDIATE : AGGSPLIT_INITIAL_SERIAL,
+										false, /* streaming */
+										info->dqa_group_clause,
+										NIL,
+										ctx->agg_partial_costs,
+										dnum_groups);
 
-	path = (Path *) create_agg_path(root,
-									output_rel,
-									path,
-									ctx->partial_grouping_target,
-									AGG_HASHED,
-									AGGSPLIT_INTERMEDIATE | AGGSPLIT_DQAWITHAGG,
-									false, /* streaming */
-									ctx->groupClause,
-									NIL,
-									ctx->agg_partial_costs,
-									estimate_num_groups_on_segment(ctx->dNumGroupsTotal,
-																   path->rows, path->locus));
+		path = (Path *) create_agg_path(root,
+										output_rel,
+										path,
+										ctx->partial_grouping_target,
+										AGG_HASHED,
+										AGGSPLIT_INTERMEDIATE | AGGSPLIT_DQAWITHAGG,
+										false, /* streaming */
+										ctx->groupClause,
+										NIL,
+										ctx->agg_partial_costs,
+										dnum_groups);
 
-	CdbPathLocus singleQE_locus;
-	CdbPathLocus_MakeSingleQE(&singleQE_locus, getgpsegmentCount());
-	path = cdbpath_create_motion_path(root,
-									  path,
-									  NIL,
-									  false,
-									  singleQE_locus);
+		CdbPathLocus singleQE_locus;
+		CdbPathLocus_MakeSingleQE(&singleQE_locus, getgpsegmentCount());
+		path = cdbpath_create_motion_path(root,
+										  path,
+										  NIL,
+										  false,
+										  singleQE_locus);
 
-	path = (Path *) create_agg_path(root,
-									output_rel,
-									path,
-									info->final_target,
-									AGG_HASHED,
-									AGGSPLIT_FINAL_DESERIAL,
-									false, /* streaming */
-									ctx->groupClause,
-									ctx->havingQual,
-									ctx->agg_final_costs,
-									ctx->dNumGroupsTotal);
+		path = (Path *) create_agg_path(root,
+										output_rel,
+										path,
+										info->final_target,
+										AGG_HASHED,
+										AGGSPLIT_FINAL_DESERIAL,
+										false, /* streaming */
+										ctx->groupClause,
+										ctx->havingQual,
+										ctx->agg_final_costs,
+										num_groups);
 
-	add_path(output_rel, path);
+		add_path(output_rel, path);
+	}
 }
 
 
@@ -2691,7 +2945,7 @@ fetch_multi_dqas_info(PlannerInfo *root,
 		}
 
 		/* assign an agg_expr_id value to aggref*/
-		aggref->agg_expr_id = agg_expr_id;
+		aggref->agg_expr_id = aggref_final->agg_expr_id = agg_expr_id;
 
 		/* rid of filter in aggref */
 		aggref->aggfilter = NULL;
@@ -2713,6 +2967,23 @@ fetch_multi_dqas_info(PlannerInfo *root,
 	 * these unrelated vars to DQAExpr_1
 	 */
 	foreach(lc, ctx->partial_grouping_target->exprs)
+	{
+		Node		*node = lfirst(lc);
+		DQAExpr 	*dqa = NULL;
+
+		if (!IsA(node, Aggref))
+			continue;
+
+		Aggref *aggref = (Aggref *)node;
+		if (aggref->aggdistinct != NULL)
+			continue;
+
+		dqa = pull_dqa_expr((Node *)aggref, info->dqa_expr_lst, proj_target, &maxRef);
+
+		/* assgin DQAExpr id to current aggref */
+		aggref->agg_expr_id = dqa->agg_expr_id;
+	}
+	foreach(lc, ctx->target->exprs)
 	{
 		Node		*node = lfirst(lc);
 		DQAExpr 	*dqa = NULL;
