@@ -2354,6 +2354,7 @@ cdbexplain_printJITSummary(ExplainState *es, QueryDesc *queryDesc)
 
 		avg_functions /= nworker;
 		avg_time /= nworker;
+		ji = &ss->workers[idx2].ji;
 		if (es->format == EXPLAIN_FORMAT_TEXT)
 		{
 			appendStringInfoSpaces(es->str, es->indent * 2);
@@ -2369,10 +2370,19 @@ cdbexplain_printJITSummary(ExplainState *es, QueryDesc *queryDesc)
 			{
 				appendStringInfo(es->str, "Timing: ");
 				if (ss->nworker == 1)
-					appendStringInfo(es->str, "%.3f ms total.\n", 1000.0 * max_time);
+					appendStringInfo(es->str, "%.3f ms total.", 1000.0 * max_time);
 				else
-					appendStringInfo(es->str, "%.3f ms avg x %d workers, %.3f ms max (seg%d).\n",
+					appendStringInfo(es->str, "%.3f ms avg x %d workers, %.3f ms max (seg%d).",
 									 1000.0 * avg_time, nworker, 1000.0 * max_time, ss->segindex0 + idx2);
+				if (es->verbose)
+					appendStringInfo(es->str, "Seg%d info: generation_counter %.3f ms, inlining_counter %.3f ms, "
+											  "optimization_counter %.3f ms, emission_counter %.3f ms.",
+											  ss->segindex0 + idx2,
+											  1000.0 * INSTR_TIME_GET_DOUBLE(ji->generation_counter),
+											  1000.0 * INSTR_TIME_GET_DOUBLE(ji->inlining_counter),
+											  1000.0 * INSTR_TIME_GET_DOUBLE(ji->optimization_counter),
+											  1000.0 * INSTR_TIME_GET_DOUBLE(ji->emission_counter));
+				appendStringInfo(es->str, "\n");
 			}
 		}
 		else
@@ -2403,6 +2413,15 @@ cdbexplain_printJITSummary(ExplainState *es, QueryDesc *queryDesc)
 					ExplainPropertyFloat("max", NULL, 1000.0 * max_time, 3, es);
 					ExplainPropertyInteger("segid", NULL, ss->segindex0 + idx2, es);
 					ExplainCloseGroup("Timing", "Timing", true, es);
+				}
+				if (es->verbose)
+				{
+					ExplainOpenGroup("Counter", "Counter", true, es);
+					ExplainPropertyFloat("generation_counter", NULL, 1000.0 * INSTR_TIME_GET_DOUBLE(ji->generation_counter), 3, es);
+					ExplainPropertyFloat("inlining_counter", NULL, 1000.0 * INSTR_TIME_GET_DOUBLE(ji->inlining_counter), 3, es);
+					ExplainPropertyFloat("optimization_counter", NULL, 1000.0 * INSTR_TIME_GET_DOUBLE(ji->optimization_counter), 3, es);
+					ExplainPropertyFloat("emission_counter", NULL, 1000.0 * INSTR_TIME_GET_DOUBLE(ji->emission_counter), 3, es);
+					ExplainCloseGroup("Counter", "Counter", true, es);
 				}
 			}
 			ExplainCloseGroup("slice", "slice", true, es);
