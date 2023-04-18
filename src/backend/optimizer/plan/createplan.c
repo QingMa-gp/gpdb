@@ -64,6 +64,7 @@
 #include "parser/parse_oper.h"	/* ordering_oper_opid */
 #include "rewrite/rewriteManip.h"
 #include "utils/guc.h"
+#include "jit/jit.h"
 
 /*
  * Flag bits that can appear in the flags argument of create_plan_recurse().
@@ -578,7 +579,43 @@ create_plan_recurse(PlannerInfo *root, Path *best_path, int flags)
 			break;
 	}
 
+	/* See about switching on JIT for this node */
+	root->glob->jitFlags = plan_consider_jit(root->glob->jitFlags, plan);
+
 	return plan;
+}
+
+int
+plan_consider_jit(int jitFlags, Plan *plan)
+{
+	plan->jit = false;
+
+	if (jit_enabled && jit_above_cost >= 0)
+	{
+		Cost total_cost = plan->total_cost;
+		if (total_cost > jit_above_cost)
+		{
+			plan->jit = true;
+			jitFlags |= PGJIT_PERFORM;
+			/*
+			 * Decide how much effort should be put into generating better code.
+			 */
+			if (jit_optimize_above_cost >= 0 &&
+				total_cost > jit_optimize_above_cost)
+				jitFlags |= PGJIT_OPT3;
+			if (jit_inline_above_cost >= 0 &&
+				total_cost > jit_inline_above_cost)
+				jitFlags |= PGJIT_INLINE;
+			/*
+			 * Decide which operations should be JITed.
+			 */
+			if (jit_expressions)
+				jitFlags |= PGJIT_EXPR;
+			if (jit_tuple_deforming)
+				jitFlags |= PGJIT_DEFORM;
+		}
+	}
+	return jitFlags;
 }
 
 /*

@@ -240,6 +240,7 @@ CTranslatorDXLToPlStmt::GetPlannedStmtFromDXL(const CDXLNode *dxlnode,
 
 	planned_stmt->rtable = m_dxl_to_plstmt_context->GetRTableEntriesList();
 	planned_stmt->subplans = m_dxl_to_plstmt_context->GetSubplanEntriesList();
+	planned_stmt->jitFlags = dxl_translate_ctxt.GetJITFlags();
 	planned_stmt->planTree = plan;
 
 	planned_stmt->canSetTag = can_set_tag;
@@ -532,6 +533,7 @@ CTranslatorDXLToPlStmt::TranslateDXLOperatorToPlan(
 		GPOS_RAISE(gpdxl::ExmaDXL, gpdxl::ExmiDXL2PlStmtConversion,
 				   dxlnode->GetOperator()->GetOpNameStr()->GetBuffer());
 	}
+	output_context->SetJITFlags(plan_consider_jit(output_context->GetJITFlags(), plan));
 	return plan;
 }
 

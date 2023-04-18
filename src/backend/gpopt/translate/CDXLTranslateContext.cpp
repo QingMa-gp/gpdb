@@ -12,7 +12,6 @@
 //
 //
 //---------------------------------------------------------------------------
-
 #include "gpopt/translate/CDXLTranslateContext.h"
 
 using namespace gpdxl;
@@ -175,5 +174,4 @@ CDXLTranslateContext::FInsertParamMapping(
 	// insert colid->target entry mapping in the hash map
 	return m_colid_to_paramid_map->Insert(key, colidparamid);
 }
-
 // EOF

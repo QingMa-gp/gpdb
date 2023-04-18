@@ -74,6 +74,8 @@ private:
 	// to use OUTER instead of 0 for Var::varno in Agg target lists (MPP-12034)
 	BOOL m_is_child_agg_node;
 
+	int m_jit_flags;
+
 	// copy the params hashmap
 	void CopyParamHashmap(ULongToColParamMap *original);
 
@@ -111,6 +113,14 @@ public:
 	// store the mapping of the given column id and param id
 	BOOL FInsertParamMapping(ULONG colid,
 							 CMappingElementColIdParamId *pmecolidparamid);
+	int GetJITFlags()
+	{
+		return m_jit_flags;
+	}
+	void SetJITFlags(int jitFlags)
+	{
+		m_jit_flags = jitFlags;
+	}
 };
 
 

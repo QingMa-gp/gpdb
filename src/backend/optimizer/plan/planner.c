@@ -422,6 +422,7 @@ standard_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	glob->lastPHId = 0;
 	glob->lastRowMarkId = 0;
 	glob->lastPlanNodeId = 0;
+	glob->jitFlags = 0;
 	glob->transientPlan = false;
 	glob->oneoffPlan = false;
 	glob->numSlices = 0;
@@ -745,8 +746,7 @@ standard_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	result->stmt_location = parse->stmt_location;
 	result->stmt_len = parse->stmt_len;
 
-	/* GPDB: JIT flags are set in wrapper function */
-	compute_jit_flags(result);
+	result->jitFlags = glob->jitFlags;
 
 	if (glob->partition_directory != NULL)
 		DestroyPartitionDirectory(glob->partition_directory);

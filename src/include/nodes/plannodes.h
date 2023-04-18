@@ -280,6 +280,11 @@ typedef struct Plan
 	bool		parallel_safe;	/* OK to use as part of parallel plan? */
 
 	/*
+	 * information needed for jit
+	 */
+	bool		jit;			/* jit compile for this plan node */
+
+	/*
 	 * Common structural data for all Plan types.
 	 */
 	int			plan_node_id;	/* unique across entire final plan tree */
@@ -1810,4 +1815,5 @@ typedef struct PartitionSelector
 
 } PartitionSelector;
 
+int plan_consider_jit(int jitFlags, Plan *plan);
 #endif							/* PLANNODES_H */

@@ -194,6 +194,8 @@ typedef struct PlannerGlobal
 
 	int			lastPlanNodeId; /* highest plan node ID assigned */
 
+	int			jitFlags;		/* OR mask of jitFlags for each plan node */
+
 	bool		transientPlan;	/* redo plan when TransactionXmin changes? */
 	bool		oneoffPlan;		/* redo plan on every execution? */
 	Oid			simplyUpdatableRel; /* if valid, query can be used with CURRENT OF for this rel */
