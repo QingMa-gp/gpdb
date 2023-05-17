@@ -686,7 +686,10 @@ generate_nonunion_plan(SetOperationStmt *op, PlannerInfo *root,
 			 * for that here.
 			 */
 			while (IsA(subplan, Motion))
+			{
+				Assert(0);
 				subplan = subplan->lefttree;
+			}
 
 			l = lappend(l, make_motion_hash_all_targets(root, subplan));
 		}
