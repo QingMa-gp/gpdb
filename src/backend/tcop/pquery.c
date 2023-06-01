@@ -159,6 +159,7 @@ CreateUtilityQueryDesc(Node *utilitystmt,
 
 	qd->extended_query = false; /* default value */
 	qd->portal_name = NULL;
+	qd->showstatctx = NULL;
 
 	return qd;
 }
