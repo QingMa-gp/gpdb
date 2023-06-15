@@ -10,6 +10,8 @@
 -- end_matchsubs
 
 -- start from a clean state
+alter system set autovacuum_naptime = 1111;
+select gp_segment_id, pg_reload_conf() from gp_id union select gp_segment_id, pg_reload_conf() from gp_dist_random('gp_id');
 checkpoint;
 
 -- we'll use a specific tablespace to test
@@ -69,6 +71,9 @@ select gp_segment_id, filename from gp_toolkit.gp_check_orphaned_files;
 select gp_segment_id, regexp_replace(filename, '\d+', 'x'), relname from gp_toolkit.gp_check_missing_files_ext;
 
 RESET client_min_messages;
+
+alter system reset autovacuum_naptime;
+select gp_segment_id, pg_reload_conf() from gp_id union select gp_segment_id, pg_reload_conf() from gp_dist_random('gp_id');
 
 -- cleanup
 drop table checkmissing_heap;

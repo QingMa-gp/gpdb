@@ -34,6 +34,7 @@
 #include "utils/inval.h"
 
 #include "utils/faultinjector.h"
+#include "postmaster/autovacuum.h"
 
 static MemoryContext pendingOpsCxt; /* context for the pending ops state  */
 
@@ -212,7 +213,7 @@ SyncPostCheckpoint(void)
 		 * which is perfectly tolerable.
 		 */
 		if (entry->cycle_ctr == checkpoint_cycle_ctr)
-			break;
+            break;
 
 		/* Unlink the file */
 		if (syncsw[entry->tag.handler].sync_unlinkfiletag(&entry->tag,
@@ -247,6 +248,8 @@ SyncPostCheckpoint(void)
 			absorb_counter = UNLINKS_PER_ABSORB;
 		}
 	}
+    if (autovacuum_naptime)
+        Assert(pendingUnlinks == NIL);
 }
 
 /*
