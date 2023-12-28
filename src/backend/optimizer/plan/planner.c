@@ -8263,7 +8263,7 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 		/* Shouldn't have any parameterized paths anymore */
 		Assert(subpath->param_info == NULL);
 
-		if (tlist_same_exprs)
+		if (tlist_same_exprs && subpath->pathtarget->sortgrouprefs)
 			subpath->pathtarget->sortgrouprefs =
 				scanjoin_target->sortgrouprefs;
 		else

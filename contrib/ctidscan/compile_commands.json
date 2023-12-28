@@ -1,0 +1,41 @@
+[
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Wall",
+      "-Wmissing-prototypes",
+      "-Wpointer-arith",
+      "-Werror=vla",
+      "-Wendif-labels",
+      "-Wmissing-format-attribute",
+      "-Wformat-security",
+      "-fno-strict-aliasing",
+      "-fwrapv",
+      "-Wno-unused-but-set-variable",
+      "-Wno-unused-command-line-argument",
+      "-Wno-compound-token-split-by-macro",
+      "-Wno-deprecated-non-prototype",
+      "-g",
+      "-O0",
+      "-Werror=uninitialized",
+      "-Werror=implicit-function-declaration",
+      "-I.",
+      "-I.",
+      "-I../../src/include",
+      "-I/usr/local/Cellar/zstd/1.5.5/include",
+      "-isysroot",
+      "/Library/Developer/CommandLineTools/SDKs/MacOSX14.2.sdk",
+      "-I/usr/local/opt/apr/include",
+      "-I/usr/local/Cellar/libevent/2.1.12_1/include",
+      "-I/usr/local/Cellar/libyaml/0.2.5/include",
+      "-I/usr/local/Cellar/zstd/1.5.5/include",
+      "-c",
+      "-o",
+      "ctidscan.o",
+      "ctidscan.c"
+    ],
+    "directory": "/Users/maqi/workspace/gpdb7/contrib/ctidscan",
+    "file": "/Users/maqi/workspace/gpdb7/contrib/ctidscan/ctidscan.c",
+    "output": "/Users/maqi/workspace/gpdb7/contrib/ctidscan/ctidscan.o"
+  }
+]

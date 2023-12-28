@@ -146,6 +146,18 @@ ExecInitExpr(Expr *node, PlanState *parent)
 	/* Insert EEOP_*_FETCHSOME steps as needed */
 	ExecInitExprSlots(state, (Node *) node);
 
+	if (nodeTag(node) == T_List)
+	{
+		List *outlist = NIL;
+		ListCell *l;
+
+		foreach(l, (List *)node)
+		{
+			outlist = lappend(outlist, ExecInitExpr((Expr *)lfirst(l), parent));
+		}
+		return (ExprState *)outlist;
+	}
+
 	/* Compile the expression proper */
 	ExecInitExprRec(node, state, &state->resvalue, &state->resnull);
 
@@ -2200,7 +2212,6 @@ ExecInitExprRec(Expr *node, ExprState *state,
 				ExprEvalPushStep(state, &scratch);
 				break;
 			}
-
 		default:
 			elog(ERROR, "unrecognized node type: %d",
 				 (int) nodeTag(node));

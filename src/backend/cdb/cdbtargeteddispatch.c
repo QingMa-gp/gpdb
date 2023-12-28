@@ -19,6 +19,7 @@
 #include "optimizer/clauses.h"
 #include "parser/parsetree.h"	/* for rt_fetch() */
 #include "nodes/makefuncs.h"	/* for makeVar() */
+#include "nodes/nodes.h"
 #include "utils/relcache.h"		/* RelationGetPartitioningKey() */
 #include "optimizer/optimizer.h"
 #include "optimizer/predtest_valueset.h"
@@ -409,6 +410,7 @@ DirectDispatchUpdateContentIdsFromPlan(PlannerInfo *root, Plan *plan)
 			DisableTargetedDispatch(&dispatchInfo);
 			break;
 		case T_SeqScan:
+		case T_CustomScan:
 			/*
 			 * we can determine the dispatch data to merge by looking at
 			 * the relation begin scanned
