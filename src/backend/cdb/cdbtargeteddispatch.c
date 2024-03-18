@@ -115,6 +115,9 @@ GetContentIdsFromPlanForSingleRelation(PlannerInfo *root, Plan *plan, int rangeT
 		 * since we will recurse to the child scan.
 		 */
 	}
+	else if (nodeTag((Node *) plan) == T_CustomScan)
+	{
+	}
 	else
 	{
 		Assert(plan->lefttree == NULL);
@@ -530,6 +533,8 @@ DirectDispatchUpdateContentIdsFromPlan(PlannerInfo *root, Plan *plan)
 													 * so disable */
 			break;
 		case T_SplitUpdate:
+			break;
+		case T_CustomScan:
 			break;
 		default:
 			elog(ERROR, "unknown plan node %d", nodeTag(plan));

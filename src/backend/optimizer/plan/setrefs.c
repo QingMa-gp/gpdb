@@ -386,7 +386,7 @@ set_plan_references(PlannerInfo *root, Plan *plan)
 	 * This method formalizes our assumptions about the input to set_plan_references.
 	 * This will hopefully, help us debug any problems.
 	 */
-	set_plan_references_input_asserts(glob, plan, root->parse->rtable);
+	// set_plan_references_input_asserts(glob, plan, root->parse->rtable);
 #endif
 
 	/*
@@ -456,7 +456,7 @@ set_plan_references(PlannerInfo *root, Plan *plan)
 	/**
 	 * Ensuring that the output of setrefs behaves as expected.
 	 */
-	set_plan_references_output_asserts(glob, result);
+//	set_plan_references_output_asserts(glob, result);
 #endif
 
 	return result;

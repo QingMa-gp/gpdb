@@ -2401,7 +2401,7 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 				}
 			}
 		}
-		
+
 		/*
 		 * Collect statistics about aggregates for estimating costs, and mark
 		 * all the aggregates with resolved aggtranstypes.  We must do this

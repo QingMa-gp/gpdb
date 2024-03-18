@@ -1965,6 +1965,9 @@ expression_tree_walker(Node *node,
 
 	switch (nodeTag(node))
 	{
+		case T_Integer:
+		case T_Float:
+		case T_String:
 		case T_Var:
 		case T_Const:
 		case T_Param:
