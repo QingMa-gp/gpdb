@@ -174,9 +174,6 @@ typedef struct
 
 static void create_two_stage_paths(PlannerInfo *root, cdb_agg_planning_context *ctx,
 								   RelOptInfo *input_rel, RelOptInfo *output_rel, GroupPathExtraData *extra);
-static List *get_common_group_tles(PathTarget *target,
-								   List *groupClause,
-								   List *rollups);
 static List *get_all_rollup_groupclauses(List *rollups);
 
 static Index add_gsetid_tlist(List *tlist);

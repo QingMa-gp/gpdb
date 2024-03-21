@@ -207,8 +207,6 @@ CreateSharedMemoryAndSemaphores(int port)
 		elog(DEBUG1, "Size not including the buffer pool %lu",
 			 (unsigned long) size);
 
-		/* freeze the addin request size and include it */
-		addin_request_allowed = false;
 		size = add_size(size, total_addin_request);
 
 		/* might as well round it off to a multiple of a typical page size */
