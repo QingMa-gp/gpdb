@@ -275,7 +275,6 @@ AppendOnlySegmentFileTruncateToEOF(Relation aorel, int segno, int64 segeof, AOVa
 
 static void
 AppendOnlyMoveTuple(TupleTableSlot *slot,
-					MemTupleBinding *mt_bind,
 					AppendOnlyInsertDesc insertDesc,
 					ResultRelInfo *resultRelInfo,
 					EState *estate)
@@ -287,14 +286,13 @@ AppendOnlyMoveTuple(TupleTableSlot *slot,
 
 	Assert(resultRelInfo);
 	Assert(slot);
-	Assert(mt_bind);
 	Assert(estate);
 
 	oldAoTupleId = (AOTupleId *) &slot->tts_tid;
 	/* Extract all the values of the tuple */
 	slot_getallattrs(slot);
 
-	tuple = appendonly_fetch_memtuple(slot, mt_bind, &shouldFree);
+	tuple = ExecFetchSlotMemTuple(slot, insertDesc->mt_bind, &shouldFree);
 	appendonly_insert(insertDesc,
 					  tuple,
 					  &newAoTupleId);
@@ -322,16 +320,12 @@ AppendOnlyMoveTuple(TupleTableSlot *slot,
 }
 
 void
-AppendOnlyThrowAwayTuple(Relation rel, TupleTableSlot *slot, MemTupleBinding *mt_bind)
+AppendOnlyThrowAwayTuple(Relation rel, TupleTableSlot *slot)
 {
 	int			i;
 	int			numAttrs;
-	bool		shouldFree;
-	MemTuple	tuple;
 	TupleDesc	tupleDesc;
 	AOTupleId  *aoTupleId;
-	Datum		toast_values[MaxHeapAttributeNumber];
-	bool		toast_isnull[MaxHeapAttributeNumber];
 
 	Assert(slot);
 
@@ -339,30 +333,25 @@ AppendOnlyThrowAwayTuple(Relation rel, TupleTableSlot *slot, MemTupleBinding *mt
 	/* Extract all the values of the tuple */
 	slot_getallattrs(slot);
 
-	tuple = appendonly_fetch_memtuple(slot, mt_bind, &shouldFree);
 	tupleDesc = rel->rd_att;
 	numAttrs = tupleDesc->natts;
 
 	Assert(numAttrs <= MaxHeapAttributeNumber);
-
-	memtuple_deform((MemTuple) tuple, mt_bind, toast_values, toast_isnull);
 
 	/* loop through all attributes, delete external stored values */
 	for (i = 0; i < numAttrs; i++)
 	{
 		if (TupleDescAttr(tupleDesc, i)->attlen == -1)
 		{
-			Datum		value = toast_values[i];
+			Datum		value   = slot->tts_values[i];
+			bool		is_null = slot->tts_isnull[i];
 
-			if (toast_isnull[i])
+			if (is_null)
 				continue;
 			else if (VARATT_IS_EXTERNAL_ONDISK(PointerGetDatum(value)))
 				toast_delete_datum(rel, value, false);
 		}
 	}
-
-	if (shouldFree)
-		appendonly_free_memtuple(tuple);
 
 	if (Debug_appendonly_print_compaction)
 		ereport(DEBUG5,
@@ -388,7 +377,6 @@ AppendOnlySegmentFileFullCompaction(Relation aorel,
 	AppendOnlyScanDesc scanDesc;
 	TupleDesc	tupDesc;
 	TupleTableSlot *slot;
-	MemTupleBinding *mt_bind;
 	int			compact_segno;
 	int64		movedTupleCount = 0;
 	ResultRelInfo *resultRelInfo;
@@ -437,7 +425,6 @@ AppendOnlySegmentFileFullCompaction(Relation aorel,
 	tupDesc = RelationGetDescr(aorel);
 	slot = table_slot_create(aorel, NULL);
 	slot->tts_tableOid = RelationGetRelid(aorel);
-	mt_bind = create_memtuple_binding(tupDesc, tupDesc->natts);
 
 	/*
 	 * We need a ResultRelInfo and an EState so we can use the regular
@@ -473,7 +460,6 @@ AppendOnlySegmentFileFullCompaction(Relation aorel,
 		if (AppendOnlyVisimap_IsVisible(&scanDesc->visibilityMap, aoTupleId))
 		{
 			AppendOnlyMoveTuple(slot,
-								mt_bind,
 								insertDesc,
 								resultRelInfo,
 								estate);
@@ -482,7 +468,7 @@ AppendOnlySegmentFileFullCompaction(Relation aorel,
 		else
 		{
 			/* Tuple is invisible and needs to be dropped */
-			AppendOnlyThrowAwayTuple(aorel, slot, mt_bind);
+			AppendOnlyThrowAwayTuple(aorel, slot);
 			vacrelstats->num_dead_tuples++;
 			// TODO: need to evaluate performance impact of reporting with such granularity
 			pgstat_progress_update_param(PROGRESS_VACUUM_NUM_DEAD_TUPLES,
@@ -523,7 +509,6 @@ AppendOnlySegmentFileFullCompaction(Relation aorel,
 	FreeExecutorState(estate);
 
 	ExecDropSingleTupleTableSlot(slot);
-	destroy_memtuple_binding(mt_bind);
 
 	appendonly_endscan(&scanDesc->rs_base);
 }

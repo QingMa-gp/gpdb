@@ -850,7 +850,7 @@ appendonly_tuple_insert(Relation relation, TupleTableSlot *slot, CommandId cid,
 	 * rows to bump gp_fastsequence by.
 	 */
 	insertDesc = get_or_create_ao_insert_descriptor(relation, NUM_FAST_SEQUENCES);
-	mtuple = appendonly_fetch_memtuple(slot, insertDesc->mt_bind, &shouldFree);
+	mtuple = ExecFetchSlotMemTuple(slot, insertDesc->mt_bind, &shouldFree);
 
 	/* Update the tuple with table oid */
 	slot->tts_tableOid = RelationGetRelid(relation);
@@ -962,7 +962,7 @@ appendonly_tuple_update(Relation relation, ItemPointer otid, TupleTableSlot *slo
 	/* Update the tuple with table oid */
 	slot->tts_tableOid = RelationGetRelid(relation);
 
-	mtuple = appendonly_fetch_memtuple(slot, insertDesc->mt_bind, &shouldFree);
+	mtuple = ExecFetchSlotMemTuple(slot, insertDesc->mt_bind, &shouldFree);
 
 #ifdef FAULT_INJECTOR
 	FaultInjector_InjectFaultIfSet(
@@ -1209,7 +1209,6 @@ appendonly_relation_cluster_internals(Relation OldHeap, Relation NewHeap,
 	int						natts;
 	int						write_seg_no;
 
-	MemTupleBinding*		mt_bind = NULL;
 	MemTuple				mtuple = NULL;
 	AppendOnlyInsertDesc	aoInsertDesc = NULL;
 	double					n_tuples_written = 0;
@@ -1298,8 +1297,6 @@ appendonly_relation_cluster_internals(Relation OldHeap, Relation NewHeap,
 
 	SIMPLE_FAULT_INJECTOR("cluster_ao_seq_scan_begin");
 
-	mt_bind = create_memtuple_binding(oldTupDesc, oldTupDesc->natts);
-
 	while (appendonly_getnextslot(aoscandesc, ForwardScanDirection, slot))
 	{
 		Datum	   *slot_values;
@@ -1369,7 +1366,7 @@ appendonly_relation_cluster_internals(Relation OldHeap, Relation NewHeap,
 
 		heap_deform_tuple(tuple, oldTupDesc, values, isnull);
 
-		len = compute_memtuple_size(mt_bind, values, isnull, &null_save_len, &has_nulls);
+		len = compute_memtuple_size(aoInsertDesc->mt_bind, values, isnull, &null_save_len, &has_nulls);
 		if (len > 0)
 		{
 			if (mtuple != NULL)
@@ -1377,7 +1374,7 @@ appendonly_relation_cluster_internals(Relation OldHeap, Relation NewHeap,
 			mtuple = NULL;
 		}
 
-		mtuple = memtuple_form_to(mt_bind, values, isnull, len, null_save_len, has_nulls, mtuple);
+		mtuple = memtuple_form_to(aoInsertDesc->mt_bind, values, isnull, len, null_save_len, has_nulls, mtuple);
 
 		appendonly_insert(aoInsertDesc, mtuple, &aoTupleId);
 		/* Report n_tuples */

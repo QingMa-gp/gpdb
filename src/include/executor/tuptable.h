@@ -343,6 +343,8 @@ extern void slot_getsomeattrs_int(TupleTableSlot *slot, int attnum);
 extern MemTuple appendonly_form_memtuple(TupleTableSlot *slot, MemTupleBinding *mt_bind);
 extern void appendonly_free_memtuple(MemTuple tuple);
 
+extern void ExecStoreMemTuple(TupleTableSlot *slot, MemTuple mtup);
+
 #ifndef FRONTEND
 
 

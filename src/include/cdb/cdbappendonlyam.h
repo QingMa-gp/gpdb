@@ -525,7 +525,7 @@ extern bool appendonly_positionscan(AppendOnlyScanDesc aoscan,
 									AppendOnlyBlockDirectoryEntry *dirEntry,
 									int fsInfoIdx);
 
-extern MemTuple appendonly_fetch_memtuple(TupleTableSlot *slot, MemTupleBinding *mt_bind, bool *shouldFree);
+extern MemTuple ExecFetchSlotMemTuple(TupleTableSlot *slot, MemTupleBinding *mt_bind, bool *shouldFree);
 /*
  * Update total bytes read for the entire scan. If the block was compressed,
  * update it with the compressed length. If the block was not compressed, update

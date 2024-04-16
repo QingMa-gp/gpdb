@@ -81,6 +81,8 @@ static inline void tts_buffer_heap_store_tuple(TupleTableSlot *slot,
 											   bool transfer_pin);
 static void tts_heap_store_tuple(TupleTableSlot *slot, HeapTuple tuple, bool shouldFree);
 
+static MemTuple ExecCopySlotMemTuple(TupleTableSlot *slot, MemTupleBinding *pbind);
+
 const TupleTableSlotOps TTSOpsVirtual;
 const TupleTableSlotOps TTSOpsHeapTuple;
 const TupleTableSlotOps TTSOpsMinimalTuple;
@@ -894,15 +896,15 @@ tts_mem_release(TupleTableSlot *slot)
 {
 	MemTupleTableSlot *mslot = (MemTupleTableSlot *)slot;
 
-	if (mslot->mt_bind)
-		destroy_memtuple_binding(mslot->mt_bind);
+	Assert(mslot->mt_bind);
+	destroy_memtuple_binding(mslot->mt_bind);
 }
 
 static void
 tts_mem_clear(TupleTableSlot *slot)
 {
 	MemTupleTableSlot *mslot = (MemTupleTableSlot *)slot;
-	if (unlikely(TTS_SHOULDFREE(slot)))
+	if (TTS_SHOULDFREE(slot))
 	{
 		appendonly_free_memtuple(mslot->tuple);
 		mslot->tuple = NULL;
@@ -985,41 +987,33 @@ tts_mem_materialize(TupleTableSlot *slot)
 	slot->tts_flags |= TTS_FLAG_SHOULDFREE;
 	MemoryContextSwitchTo(oldContext);
 }
-
 static void
 tts_mem_copyslot(TupleTableSlot *dstslot, TupleTableSlot *srcslot)
 {
-	TupleDesc	srcdesc = srcslot->tts_tupleDescriptor;
+	MemTuple mtup;
+	MemoryContext oldcontext;
+	MemTupleTableSlot *mslot = (MemTupleTableSlot *) dstslot;
 
-	Assert(srcdesc->natts <= dstslot->tts_tupleDescriptor->natts);
+	Assert(mslot->mt_bind);
 
 	tts_mem_clear(dstslot);
 
-	slot_getallattrs(srcslot);
+	/* Create a copy of the contents of srcslot */
+	oldcontext = MemoryContextSwitchTo(dstslot->tts_mcxt);
+	mtup = ExecCopySlotMemTuple(srcslot, mslot->mt_bind);
+	MemoryContextSwitchTo(oldcontext);
 
-	for (int natt = 0; natt < srcdesc->natts; natt++)
-	{
-		dstslot->tts_values[natt] = srcslot->tts_values[natt];
-		dstslot->tts_isnull[natt] = srcslot->tts_isnull[natt];
-	}
-
-	dstslot->tts_nvalid = srcdesc->natts;
-	dstslot->tts_flags &= ~TTS_FLAG_EMPTY;
-
-	/* make sure storage doesn't depend on external memory */
-	tts_mem_materialize(dstslot);
+	/* store the constructed mtup in dstslot */
+	ExecStoreMemTuple(dstslot, mtup);
 }
 
 static HeapTuple
 tts_mem_copy_heap_tuple(TupleTableSlot *slot)
 {
-	MemTupleTableSlot *mslot = (MemTupleTableSlot *) slot;
 	Assert(!TTS_EMPTY(slot));
+
 	if (slot->tts_nvalid < slot->tts_tupleDescriptor->natts)
-	{
-		memtuple_deform(mslot->tuple, mslot->mt_bind, slot->tts_values, slot->tts_isnull);
-		slot->tts_nvalid = slot->tts_tupleDescriptor->natts;
-	}
+		slot_deform_mem_tuple(slot, slot->tts_tupleDescriptor->natts);
 
 	return heap_form_tuple(slot->tts_tupleDescriptor,
 						   slot->tts_values,
@@ -1029,13 +1023,10 @@ tts_mem_copy_heap_tuple(TupleTableSlot *slot)
 static MinimalTuple
 tts_mem_copy_minimal_tuple(TupleTableSlot *slot)
 {
-	MemTupleTableSlot *mslot = (MemTupleTableSlot *) slot;
 	Assert(!TTS_EMPTY(slot));
+
 	if (slot->tts_nvalid < slot->tts_tupleDescriptor->natts)
-	{
-		memtuple_deform(mslot->tuple, mslot->mt_bind, slot->tts_values, slot->tts_isnull);
-		slot->tts_nvalid = slot->tts_tupleDescriptor->natts;
-	}
+		slot_deform_mem_tuple(slot, slot->tts_tupleDescriptor->natts);
 
 	return heap_form_minimal_tuple(slot->tts_tupleDescriptor,
 								   slot->tts_values,
@@ -1210,7 +1201,7 @@ slot_deform_heap_tuple(TupleTableSlot *slot, HeapTuple tuple, uint32 *offp,
 
 /*
  * slot_deform_mem_tuple
- *		Given a TupleTableSlot, extract data from the slot's memtuple tuple
+ *		Given a TupleTableSlot, extract data from the slot's memtuple 
  *		into its Datum/isnull arrays.  Data is extracted up through the
  *		natts'th column (caller must ensure this is a legal column number).
  *
@@ -1222,8 +1213,6 @@ slot_deform_heap_tuple(TupleTableSlot *slot, HeapTuple tuple, uint32 *offp,
 static pg_attribute_always_inline void
 slot_deform_mem_tuple(TupleTableSlot *slot, int natts)
 {
-
-
 	int attnum = slot->tts_nvalid;
 	bool *isnull = slot->tts_isnull;
 
@@ -1749,6 +1738,50 @@ ExecForceStoreHeapTuple(HeapTuple tuple,
 			pfree(tuple);
 		}
 	}
+}
+
+/*
+ * ExecCopySlotMemTuple - returns MemTuple extracted from slot, in caller's
+ * memory context.
+ */
+static MemTuple
+ExecCopySlotMemTuple(TupleTableSlot *slot, MemTupleBinding *pbind)
+{
+	/* materialize and guarantee that srcslot's tts_values/tts_isnull are populated */
+	slot->tts_ops->materialize(slot);
+	slot_getallattrs(slot);
+	return memtuple_form(pbind, slot->tts_values, slot->tts_isnull);
+}
+
+/*
+ * Store the contents of 'mtup' (which is pointing into an in-memory varblock)
+ * into the given 'slot' in materialized form.
+ */
+void
+ExecStoreMemTuple(TupleTableSlot *slot, MemTuple mtup)
+{
+	MemoryContext oldContext;
+	MemTupleTableSlot *mslot = (MemTupleTableSlot *) slot;
+
+	Assert(mslot != NULL);
+	Assert(slot->tts_tupleDescriptor != NULL);
+	Assert(TTS_EMPTY(slot));
+	Assert(mtup != NULL);
+
+	Assert(TTS_IS_MEMTUPLE(slot));
+
+	/*
+	* Copy the tuple into the slot's context, as the source tuple is pointing into
+	* an in-memory varblock, the contents of which will be constantly replaced.
+	*/
+	oldContext = MemoryContextSwitchTo(slot->tts_mcxt);
+	mslot->tuple = memtuple_copytuple(mtup);
+	slot->tts_flags &= ~TTS_FLAG_EMPTY;
+
+	/* the slot now owns the tuple, so set TTS_FLAG_SHOULDFREE */
+	slot->tts_flags |= TTS_FLAG_SHOULDFREE;
+
+	MemoryContextSwitchTo(oldContext);
 }
 
 /*

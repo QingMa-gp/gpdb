@@ -97,10 +97,6 @@ static void AppendOnlyExecutorReadBlock_ResetCounts(
 static void AppendOnlyScanDesc_UpdateTotalBytesRead(
 										AppendOnlyScanDesc scan);
 
-static TupleTableSlot *appendonly_store_memtuple(TupleTableSlot *slot,
-												 MemTuple mtup,
-												 bool shouldFree);
-
 static void appendonly_update_memtuple_binding(TupleTableSlot *slot, int largestAttnum);
 /* ----------------
  *		initscan - scan code common to appendonly_beginscan and appendonly_rescan
@@ -881,7 +877,7 @@ AppendOnlyExecutorReadBlock_ProcessTuple(AppendOnlyExecutorReadBlock *executorRe
 	{
 		ExecClearTuple(slot);
 		slot->tts_tid = fake_ctid;
-		appendonly_store_memtuple(slot, tuple, false);
+		ExecStoreMemTuple(slot, tuple);
 	}
 
 	/* skip visibility test, all tuples are visible */
@@ -3417,86 +3413,66 @@ appendonly_insert_finish(AppendOnlyInsertDesc aoInsertDesc)
 	pfree(aoInsertDesc);
 }
 
-/*
- * Store a memory tuple and MemTupleBinding into a MemTupleTableSlot.
- */
-static TupleTableSlot *appendonly_store_memtuple(TupleTableSlot *slot,
-												 MemTuple mtup,
-												 bool shouldFree)
-{
-	MemTupleTableSlot *mslot = (MemTupleTableSlot *)slot;
-
-	/*
-	 * sanity checks
-	 */
-	Assert(slot != NULL);
-	Assert(slot->tts_tupleDescriptor != NULL);
-	Assert(TTS_EMPTY(slot));
-
-	Assert(mtup != NULL);
-
-	if (unlikely(!TTS_IS_MEMTUPLE(slot)))
-		elog(ERROR, "trying to store an ao_row tuple into wrong type of slot");
-
-	slot->tts_flags &= ~TTS_FLAG_EMPTY;
-
-	memtuple_deform(mtup, mslot->mt_bind, slot->tts_values, slot->tts_isnull);
-	mslot->tuple = mtup;
-	slot->tts_nvalid = slot->tts_tupleDescriptor->natts;
-
-	if (shouldFree)
-		slot->tts_flags |= TTS_FLAG_SHOULDFREE;
-
-	return slot;
-}
-
 static void appendonly_update_memtuple_binding(TupleTableSlot *slot, int largestAttnum)
 {
+	MemoryContext oldContext;
 	MemTupleTableSlot *mslot = (MemTupleTableSlot *)slot;
 
 	/*
 	 * sanity checks
 	 */
 	Assert(slot != NULL);
+	Assert(TTS_IS_MEMTUPLE(slot));
 	Assert(slot->tts_tupleDescriptor != NULL);
 	Assert(largestAttnum != InvalidAttrNumber);
 
-	if (unlikely(!TTS_IS_MEMTUPLE(slot)))
-		elog(ERROR, "Only able to update memtuple binding for a memtuple table slot");
 	destroy_memtuple_binding(mslot->mt_bind);
+
+	oldContext = MemoryContextSwitchTo(slot->tts_mcxt);
 	mslot->mt_bind = create_memtuple_binding(slot->tts_tupleDescriptor, largestAttnum);
+	MemoryContextSwitchTo(oldContext);
 }
 
 /*
- * If the slot is MemTupleTableSlot, return mslot->tuple, otherwise form the memory tuple.
+ * ExecFetchSlotMemTuple - fetch memtuple representing the slot's content.
+ *
+ * This is in the same spirit as ExecFetchSlotHeapTuple().
+ * 
+ * Depending on the calling context, 'slot' may or may not be a MemTupleTableSlot.
+ * 
+ * If it is, we simply return the MemTuple within.
+ * 
+ * Otherwise, we must materialize the slot and then form a MemTuple on the fly,
+ * using the slot's tts_values/tts_isnull and the passed in 'mt_bind'.
  */
 MemTuple
-appendonly_fetch_memtuple(TupleTableSlot *slot, MemTupleBinding *mt_bind, bool *shouldFree)
+ExecFetchSlotMemTuple(TupleTableSlot *slot, MemTupleBinding *mt_bind, bool *shouldFree)
 {
 	MemTupleTableSlot *mslot = (MemTupleTableSlot *)slot;
 
-	/*
-	 * sanity check
-	 */
-	Assert(slot != NULL);
-	Assert(mt_bind != NULL);
-	Assert(shouldFree != NULL);
-
-	/*
-	 * if the slot isn't MemTupleTableSlot, caller should free this memory tuple after use.
-	 */
-	if (!TTS_IS_MEMTUPLE(slot))
-	{
-		*shouldFree = true;
-		return appendonly_form_memtuple(slot, mt_bind);
-	}
+	Assert(slot);
+	Assert(!TTS_EMPTY(slot));
 
 	/* Materialize the tuple so that the slot "owns" it */
 	slot->tts_ops->materialize(slot);
 
-	/*
-	 * mslot->tuple should be freed by tts_mem_clear()
+	if (!TTS_IS_MEMTUPLE(slot))
+	{
+		Assert(mt_bind);
+
+		/* if this isn't a MemTupleTableSlot, caller should free it. */
+		if (shouldFree)
+			*shouldFree = true;
+
+		return appendonly_form_memtuple(slot, mt_bind);
+	}
+
+	/* 
+	 * Tuple is owned by the slot and already materialized.
+	 * It will be freed along with the slot. Simply return it.
 	 */
-	*shouldFree = false;
+	Assert(mslot->tuple);
+	if (shouldFree)
+			*shouldFree = false;
 	return mslot->tuple;
 }

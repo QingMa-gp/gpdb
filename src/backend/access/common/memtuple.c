@@ -900,6 +900,9 @@ bool MemTupleHasExternal(MemTuple mtup, MemTupleBinding *pbind)
 	return false;
 }
 
+/*
+ * Returns a copy of 'tuple' allocated in the current memory context.
+ */
 MemTuple memtuple_copytuple(MemTuple tuple)
 {
 	int len;
@@ -909,7 +912,7 @@ MemTuple memtuple_copytuple(MemTuple tuple)
 		return NULL;
 
 	len = memtuple_get_size(tuple);
-	newTuple = (MemTuple)palloc0(len);
+	newTuple = (MemTuple)palloc(len);
 	memcpy(newTuple, tuple, len);
 
 	return newTuple;
