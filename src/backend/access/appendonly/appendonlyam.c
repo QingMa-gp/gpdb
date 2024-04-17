@@ -97,7 +97,6 @@ static void AppendOnlyExecutorReadBlock_ResetCounts(
 static void AppendOnlyScanDesc_UpdateTotalBytesRead(
 										AppendOnlyScanDesc scan);
 
-static void appendonly_update_memtuple_binding(TupleTableSlot *slot, int largestAttnum);
 /* ----------------
  *		initscan - scan code common to appendonly_beginscan and appendonly_rescan
  * ----------------
@@ -3413,7 +3412,8 @@ appendonly_insert_finish(AppendOnlyInsertDesc aoInsertDesc)
 	pfree(aoInsertDesc);
 }
 
-static void appendonly_update_memtuple_binding(TupleTableSlot *slot, int largestAttnum)
+void 
+appendonly_update_memtuple_binding(TupleTableSlot *slot, int largestAttnum)
 {
 	MemoryContext oldContext;
 	MemTupleTableSlot *mslot = (MemTupleTableSlot *)slot;
@@ -3426,7 +3426,8 @@ static void appendonly_update_memtuple_binding(TupleTableSlot *slot, int largest
 	Assert(slot->tts_tupleDescriptor != NULL);
 	Assert(largestAttnum != InvalidAttrNumber);
 
-	destroy_memtuple_binding(mslot->mt_bind);
+	if (mslot->mt_bind)
+		destroy_memtuple_binding(mslot->mt_bind);
 
 	oldContext = MemoryContextSwitchTo(slot->tts_mcxt);
 	mslot->mt_bind = create_memtuple_binding(slot->tts_tupleDescriptor, largestAttnum);

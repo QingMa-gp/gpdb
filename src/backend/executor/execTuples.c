@@ -880,8 +880,15 @@ tts_mem_init(TupleTableSlot *slot)
 	MemTupleTableSlot *mslot = (MemTupleTableSlot *)slot;
 	MemoryContext oldContext;
 
-	if (slot->tts_tupleDescriptor == NULL)
+	if (!TTS_FIXED(slot))
+	{
+		/* 
+		 * No tuple descriptor specified yet, binding will be created in
+		 * ExecSetSlotDescriptor().
+		 */
+		Assert(!slot->tts_tupleDescriptor);
 		return;
+	}
 
 	oldContext = MemoryContextSwitchTo(slot->tts_mcxt);
 
@@ -965,6 +972,8 @@ tts_mem_materialize(TupleTableSlot *slot)
 	if (TTS_SHOULDFREE(slot))
 		return;
 
+	Assert(slot->tts_tupleDescriptor->natts == mslot->mt_bind->natts);
+
 	oldContext = MemoryContextSwitchTo(slot->tts_mcxt);
 
 	/*
@@ -995,6 +1004,7 @@ tts_mem_copyslot(TupleTableSlot *dstslot, TupleTableSlot *srcslot)
 	MemTupleTableSlot *mslot = (MemTupleTableSlot *) dstslot;
 
 	Assert(mslot->mt_bind);
+	Assert(dstslot->tts_tupleDescriptor->natts == mslot->mt_bind->natts);
 
 	tts_mem_clear(dstslot);
 
@@ -1552,10 +1562,9 @@ ExecSetSlotDescriptor(TupleTableSlot *slot, /* slot to change */
 	slot->tts_isnull = (bool *)
 		MemoryContextAlloc(slot->tts_mcxt, tupdesc->natts * sizeof(bool));
 
-	/*
-	 * And allow slot type specific initialization.
-	 */
-	slot->tts_ops->init(slot);
+	/* GPDB: For MemTupleTableSlots, we would need to reset the binding */
+	if (TTS_IS_MEMTUPLE(slot))
+		appendonly_update_memtuple_binding(slot, slot->tts_tupleDescriptor->natts);
 }
 
 /* --------------------------------
