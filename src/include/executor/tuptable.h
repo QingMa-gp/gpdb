@@ -340,7 +340,6 @@ extern void slot_getmissingattrs(TupleTableSlot *slot, int startAttNum,
 								 int lastAttNum);
 extern void slot_getsomeattrs_int(TupleTableSlot *slot, int attnum);
 
-extern MemTuple appendonly_form_memtuple(TupleTableSlot *slot, MemTupleBinding *mt_bind);
 extern void appendonly_free_memtuple(MemTuple tuple);
 extern void appendonly_update_memtuple_binding(TupleTableSlot *slot, int largestAttnum);
 

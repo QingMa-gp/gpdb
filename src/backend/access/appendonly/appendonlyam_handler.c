@@ -440,27 +440,6 @@ appendonly_slot_callbacks(Relation relation)
 	return &TTSOpsMemTuple;
 }
 
-MemTuple
-appendonly_form_memtuple(TupleTableSlot *slot, MemTupleBinding *mt_bind)
-{
-	MemTuple		result;
-	MemoryContext	oldContext;
-
-	/*
-	 * make certain that the slot's values are populated, for example during a CTAS.
-	 */
-	if (slot->tts_nvalid < slot->tts_tupleDescriptor->natts)
-		slot_getsomeattrs(slot, slot->tts_tupleDescriptor->natts);
-
-	oldContext = MemoryContextSwitchTo(slot->tts_mcxt);
-	result = memtuple_form(mt_bind,
-						   slot->tts_values,
-						   slot->tts_isnull);
-	MemoryContextSwitchTo(oldContext);
-
-	return result;
-}
-
 /*
  * appendonly_free_memtuple
  */

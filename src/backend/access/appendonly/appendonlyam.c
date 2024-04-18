@@ -822,6 +822,7 @@ AppendOnlyExecutorReadBlock_BindingInit(AppendOnlyExecutorReadBlock *executorRea
 			!AO_ATTR_VAL_IS_MISSING(rowNum, largestAttnum, segno, executorReadBlock->attnum_to_rownum))
 		largestAttnum++;
 
+	Assert(largestAttnum != InvalidAttrNumber);
 	/*
 	 * If the tuple we are currently processing is not the first tuple of this block and also
 	 * the largest attnum have not changed, we do not need to recreate the bindings again.
@@ -3449,31 +3450,33 @@ appendonly_update_memtuple_binding(TupleTableSlot *slot, int largestAttnum)
 MemTuple
 ExecFetchSlotMemTuple(TupleTableSlot *slot, MemTupleBinding *mt_bind, bool *shouldFree)
 {
-	MemTupleTableSlot *mslot = (MemTupleTableSlot *)slot;
-
 	Assert(slot);
 	Assert(!TTS_EMPTY(slot));
-
-	/* Materialize the tuple so that the slot "owns" it */
-	slot->tts_ops->materialize(slot);
 
 	if (!TTS_IS_MEMTUPLE(slot))
 	{
 		Assert(mt_bind);
 
-		/* if this isn't a MemTupleTableSlot, caller should free it. */
+		/* if this isn't a MemTupleTableSlot, caller should free the tuple returned. */
 		if (shouldFree)
 			*shouldFree = true;
 
-		return appendonly_form_memtuple(slot, mt_bind);
-	}
+		/* Make sure tts_values/tts_isnull are fully populated, so we can form the memtuple below. */
+		slot_getallattrs(slot);
 
-	/* 
-	 * Tuple is owned by the slot and already materialized.
-	 * It will be freed along with the slot. Simply return it.
-	 */
-	Assert(mslot->tuple);
-	if (shouldFree)
+		return memtuple_form(mt_bind, slot->tts_values, slot->tts_isnull);
+	}
+	else
+	{
+		MemTupleTableSlot *mslot = (MemTupleTableSlot *)slot;
+
+		/* Materialize the tuple so that the slot "owns" it */
+		slot->tts_ops->materialize(slot);
+
+		/* Tuple is owned by the slot and will be freed along with the slot. */
+		if (shouldFree)
 			*shouldFree = false;
-	return mslot->tuple;
+
+		return mslot->tuple;
+	}
 }
