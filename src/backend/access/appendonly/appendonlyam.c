@@ -3425,7 +3425,6 @@ appendonly_update_memtuple_binding(TupleTableSlot *slot, int largestAttnum)
 	Assert(slot != NULL);
 	Assert(TTS_IS_MEMTUPLE(slot));
 	Assert(slot->tts_tupleDescriptor != NULL);
-	Assert(largestAttnum != InvalidAttrNumber);
 
 	if (mslot->mt_bind)
 		destroy_memtuple_binding(mslot->mt_bind);
