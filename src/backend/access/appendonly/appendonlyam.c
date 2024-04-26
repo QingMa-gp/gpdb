@@ -3441,10 +3441,11 @@ appendonly_update_memtuple_binding(TupleTableSlot *slot, int largestAttnum)
  * 
  * Depending on the calling context, 'slot' may or may not be a MemTupleTableSlot.
  * 
- * If it is, we simply return the MemTuple within.
+ * If it isn't or the `slot->tts_tupleDescriptor` is generated for the result
+ * tuple of a targetlist, we must materialize the slot and then form a MemTuple 
+ * on the fly, using the slot's tts_values/tts_isnull and the passed in 'mt_bind'.
  * 
- * Otherwise, we must materialize the slot and then form a MemTuple on the fly,
- * using the slot's tts_values/tts_isnull and the passed in 'mt_bind'.
+ * Otherwise, we simply return the MemTuple within.
  */
 MemTuple
 ExecFetchSlotMemTuple(TupleTableSlot *slot, MemTupleBinding *mt_bind, bool *shouldFree)
@@ -3452,11 +3453,11 @@ ExecFetchSlotMemTuple(TupleTableSlot *slot, MemTupleBinding *mt_bind, bool *shou
 	Assert(slot);
 	Assert(!TTS_EMPTY(slot));
 
-	if (!TTS_IS_MEMTUPLE(slot))
+	if (!TTS_IS_MEMTUPLE(slot) || slot->tts_tupleDescriptor != mt_bind->tupdesc)
 	{
 		Assert(mt_bind);
 
-		/* if this isn't a MemTupleTableSlot, caller should free the tuple returned. */
+		/* Caller should free the tuple returned. */
 		if (shouldFree)
 			*shouldFree = true;
 
