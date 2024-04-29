@@ -109,6 +109,9 @@ slot_compile_deform(LLVMJitContext *context, TupleDesc desc,
 	if (ops == &TTSOpsVirtual)
 		return NULL;
 
+	/*
+	* GPDB: Out of line JITed deform implementation for Memtuples
+	*/
 	if (ops == &TTSOpsMemTuple)
 	{
 		return slot_compile_deform_mem_tuple(context, desc, ops, natts);
@@ -789,10 +792,6 @@ slot_compile_deform_mem_tuple(LLVMJitContext *context, TupleDesc desc,
 	LLVMValueRef v_deform_fn;
 
 	LLVMBasicBlockRef b_entry;
-	LLVMBasicBlockRef b_col_binding;
-	LLVMBasicBlockRef b_large_col_binding;
-	LLVMBasicBlockRef b_getattrbinds;
-	LLVMBasicBlockRef b_getnullbmsize;
 	LLVMBasicBlockRef b_find_start;
 	LLVMBasicBlockRef b_getmissingattrs;
 	LLVMBasicBlockRef b_out;
@@ -818,22 +817,20 @@ slot_compile_deform_mem_tuple(LLVMJitContext *context, TupleDesc desc,
 	LLVMValueRef v_nvalid;
 	LLVMValueRef v_tuplep;
 	LLVMValueRef v_bindingp;
-	LLVMValueRef v_tupleheader;
+	LLVMValueRef v_tupleheaderp;
 	LLVMValueRef v_tupledatap;
 	LLVMValueRef v_hasnulls;
 	LLVMValueRef v_islarge;
-	LLVMValueRef v_nullbmextrasizep;
 	LLVMValueRef v_bindnatts;
 	LLVMValueRef v_start;
 	LLVMValueRef v_colbindp;
-	LLVMValueRef v_colbind;
 	LLVMValueRef v_attrbinds;
 	LLVMValueRef v_nullsavesp;
 
 	int attnum;
 	mod = llvm_mutable_module(context);
 
-	funcname = llvm_expand_funcname(context, "deform");
+	funcname = llvm_expand_funcname(context, "memtup_deform");
 
 	/* Create the signature and function */
 	{
@@ -851,14 +848,6 @@ slot_compile_deform_mem_tuple(LLVMJitContext *context, TupleDesc desc,
 
 	b_entry =
 		LLVMAppendBasicBlock(v_deform_fn, "entry");
-	b_col_binding =
-		LLVMAppendBasicBlock(v_deform_fn, "get_col_binding");
-	b_large_col_binding =
-		LLVMAppendBasicBlock(v_deform_fn, "get_large_col_binding");
-	b_getattrbinds =
-		LLVMAppendBasicBlock(v_deform_fn, "b_getattrbinds");
-	b_getnullbmsize =
-		LLVMAppendBasicBlock(v_deform_fn, "b_getnullbmsize");
 	b_find_start =
 		LLVMAppendBasicBlock(v_deform_fn, "find_start_attribute");
 	b_getmissingattrs =
@@ -883,10 +872,6 @@ slot_compile_deform_mem_tuple(LLVMJitContext *context, TupleDesc desc,
 	b = LLVMCreateBuilder();
 
 	LLVMPositionBuilderAtEnd(b, b_entry);
-	v_nullbmextrasizep = LLVMBuildAlloca(b, LLVMInt32Type(), "");
-	LLVMBuildStore(b, l_int32_const(0), v_nullbmextrasizep);
-
-	v_colbindp = LLVMBuildAlloca(b, l_ptr(StructMemTupleBindingCols), "colbind");
 
 	v_slot = LLVMGetParam(v_deform_fn, 0);
 	v_tts_values =
@@ -905,7 +890,7 @@ slot_compile_deform_mem_tuple(LLVMJitContext *context, TupleDesc desc,
 		l_load_struct_gep(b, v_aoslot, FIELDNO_MEMTUPLETABLESLOT_TUPLE, "memtuple");
 	v_bindingp =
 		l_load_struct_gep(b, v_aoslot, FIELDNO_MEMTUPLETABLESLOT_BINDING, "memtup_binding");
-	v_tupleheader =
+	v_tupleheaderp =
 		l_load_struct_gep(b, v_tuplep, FIELDNO_MEMTUPLEDATA_HEADER, "memtup_header");
 	v_tupledatap =
 		LLVMBuildBitCast(b,
@@ -919,7 +904,7 @@ slot_compile_deform_mem_tuple(LLVMJitContext *context, TupleDesc desc,
 		LLVMBuildICmp(b, LLVMIntNE,
 					  LLVMBuildAnd(b,
 								   l_int32_const(MEMTUP_HASNULL),
-								   v_tupleheader, ""),
+								   v_tupleheaderp, ""),
 					  l_int32_const(0),
 					  "hasnulls");
 
@@ -927,7 +912,7 @@ slot_compile_deform_mem_tuple(LLVMJitContext *context, TupleDesc desc,
 		LLVMBuildICmp(b, LLVMIntNE,
 					  LLVMBuildAnd(b,
 								   l_int32_const(MEMTUP_LARGETUP),
-								   v_tupleheader, ""),
+								   v_tupleheaderp, ""),
 					  l_int32_const(0),
 					  "islarge");
 
@@ -961,44 +946,17 @@ slot_compile_deform_mem_tuple(LLVMJitContext *context, TupleDesc desc,
 			l_bb_append_v(v_deform_fn, "block.att.%d.fetch", attnum);
 	}
 
-	LLVMBuildCondBr(b,
-					v_islarge,
-					b_large_col_binding,
-					b_col_binding);
+	v_colbindp = LLVMBuildSelect(b,
+								 v_islarge,
+								 LLVMBuildStructGEP(b, v_bindingp, FIELDNO_MEMTUPLEBINDING_LCOLBIND, ""),
+								 LLVMBuildStructGEP(b, v_bindingp, FIELDNO_MEMTUPLEBINDING_COLBIND, ""),
+								 "");
 
-	LLVMPositionBuilderAtEnd(b, b_col_binding);
-	{
-		LLVMValueRef v_colbind = LLVMBuildStructGEP(b, v_bindingp, FIELDNO_MEMTUPLEBINDING_COLBIND, "");
-		LLVMBuildStore(b, v_colbind, v_colbindp);
-		LLVMBuildBr(b, b_getattrbinds);
-	}
-
-	LLVMPositionBuilderAtEnd(b, b_large_col_binding);
-	{
-		LLVMValueRef v_lcolbind = LLVMBuildStructGEP(b, v_bindingp, FIELDNO_MEMTUPLEBINDING_LCOLBIND, "");
-		LLVMBuildStore(b, v_lcolbind, v_colbindp);
-		LLVMBuildBr(b, b_getattrbinds);
-	}
-
-	LLVMPositionBuilderAtEnd(b, b_getattrbinds);
-	v_colbind = LLVMBuildLoad(b, v_colbindp, "colbinding");
 	v_attrbinds =
-		l_load_struct_gep(b, v_colbind, FIELDNO_MEMTUPLEBINDINGCOLS_BINDINGS, "attrbinds");
+		l_load_struct_gep(b, v_colbindp, FIELDNO_MEMTUPLEBINDINGCOLS_BINDINGS, "attrbinds");
 	v_nullsavesp =
-		LLVMBuildStructGEP(b, v_colbind, FIELDNO_MEMTUPLEBINDINGCOLS_NULLSAVES, "null_saves");
-	LLVMBuildCondBr(b, v_hasnulls, b_getnullbmsize, b_find_start);
-
-	LLVMPositionBuilderAtEnd(b, b_getnullbmsize);
-	{
-		LLVMBuildStore(b,
-					   l_load_struct_gep(b,
-										 v_bindingp,
-										 FIELDNO_MEMTUPLEBINDING_NULLBITMAPEXTRASIZE,
-										 ""),
-										 v_nullbmextrasizep);
-		LLVMBuildBr(b, b_find_start);
-	}
-
+		LLVMBuildStructGEP(b, v_colbindp, FIELDNO_MEMTUPLEBINDINGCOLS_NULLSAVES, "null_saves");	
+	LLVMBuildBr(b, b_find_start);
 
 	LLVMPositionBuilderAtEnd(b, b_find_start);
 
@@ -1046,8 +1004,6 @@ slot_compile_deform_mem_tuple(LLVMJitContext *context, TupleDesc desc,
 		LLVMValueRef v_nullsavep;
 		LLVMValueRef v_currbytep;
 		LLVMValueRef v_attdatap;
-		LLVMValueRef v_offset;
-		LLVMValueRef v_len;
 		LLVMValueRef v_resultp;
 
 		LLVMValueRef v_offp;
@@ -1061,51 +1017,53 @@ slot_compile_deform_mem_tuple(LLVMJitContext *context, TupleDesc desc,
 			b_next = attmissingcheckblocks[attnum + 1];
 
 		LLVMPositionBuilderAtEnd(b, attmissingcheckblocks[attnum]);
-		l_attno = l_int32_const(attnum);
-		LLVMBuildCondBr(b,
-						LLVMBuildICmp(b, LLVMIntULT, l_attno, v_bindnatts, ""),
-						attstartblocks[attnum],
-						b_getmissingattrs);
+		{
+			l_attno = l_int32_const(attnum);
+			LLVMBuildCondBr(b,
+							LLVMBuildICmp(b, LLVMIntULT, l_attno, v_bindnatts, ""),
+							attstartblocks[attnum],
+							b_getmissingattrs);
+		}
 
 		LLVMPositionBuilderAtEnd(b, attstartblocks[attnum]);
+		{
+			v_currbytep = LLVMBuildAlloca(b, LLVMInt32Type(), "");
+			LLVMBuildStore(b, l_int32_const(0), v_currbytep);
 
-		v_currbytep = LLVMBuildAlloca(b, LLVMInt32Type(), "");
-		LLVMBuildStore(b, l_int32_const(0), v_currbytep);
+			v_offp = LLVMBuildAlloca(b, LLVMInt32Type(), "v_offp");
+			LLVMBuildStore(b, l_int32_const(0), v_offp);
+			v_nullsavep = LLVMBuildAlloca(b, LLVMInt32Type(), "");
+			LLVMBuildStore(b, l_int32_const(0), v_nullsavep);
 
-		v_offp = LLVMBuildAlloca(b, LLVMInt32Type(), "v_offp");
-		LLVMBuildStore(b, l_int32_const(0), v_offp);
-		v_nullsavep = LLVMBuildAlloca(b, LLVMInt32Type(), "");
-		LLVMBuildStore(b, l_int32_const(0), v_nullsavep);
-
-		v_attrbindp = LLVMBuildGEP(b, v_attrbinds, &l_attno, 1, "attrbind");
-		v_len =
-			l_load_struct_gep(b, v_attrbindp, FIELDNO_MEMTUPLEATTRBINDING_LEN, "len");
-		v_offset =
-			l_load_struct_gep(b, v_attrbindp, FIELDNO_MEMTUPLEATTRBINDING_OFFSET, "offset");
-		v_nullbyteno =
-			l_load_struct_gep(b, v_attrbindp, FIELDNO_MEMTUPLEATTRBINDING_NULLBYTE, "null_byteno");
-		v_nullmask =
-			l_load_struct_gep(b, v_attrbindp, FIELDNO_MEMTUPLEATTRBINDING_NULLMASK, "null_mask");
-		LLVMBuildCondBr(b, v_hasnulls, attnullcheckblocks[attnum], attgetdataptrblocks[attnum]);
+			v_attrbindp = LLVMBuildGEP(b, v_attrbinds, &l_attno, 1, "attrbind");
+			v_nullbyteno =
+				l_load_struct_gep(b, v_attrbindp, FIELDNO_MEMTUPLEATTRBINDING_NULLBYTE, "null_byteno");
+			v_nullmask =
+				l_load_struct_gep(b, v_attrbindp, FIELDNO_MEMTUPLEATTRBINDING_NULLMASK, "null_mask");
+			LLVMBuildCondBr(b, v_hasnulls, attnullcheckblocks[attnum], attgetdataptrblocks[attnum]);
+		}
 
 		LLVMPositionBuilderAtEnd(b, attnullcheckblocks[attnum]);
-		v_nullbyte = l_load_gep1(b, v_tupledatap, v_nullbyteno, "attnullbyte");
-		LLVMBuildCondBr(b,
-						LLVMBuildICmp(b, LLVMIntNE, LLVMBuildAnd(b, v_nullbyte, v_nullmask, "nullbit"), l_int8_const(0), ""),
-						b_ifnull,
-						attnullsaveblocks[attnum]);
-
+		{
+			v_nullbyte = l_load_gep1(b, v_tupledatap, v_nullbyteno, "attnullbyte");
+			LLVMBuildCondBr(b,
+							LLVMBuildICmp(b, LLVMIntNE, LLVMBuildAnd(b, v_nullbyte, v_nullmask, "nullbit"), l_int8_const(0), ""),
+							b_ifnull,
+							attnullsaveblocks[attnum]);
+		}
 
 		LLVMPositionBuilderAtEnd(b, b_ifnull);
-		/* store null-byte */
-		LLVMBuildStore(b,
-					   l_int8_const(1),
-					   LLVMBuildGEP(b, v_tts_nulls, &l_attno, 1, ""));
-		/* store zero datum */
-		LLVMBuildStore(b,
-					   l_sizet_const(0),
-					   LLVMBuildGEP(b, v_tts_values, &l_attno, 1, ""));
-		LLVMBuildBr(b, b_next);
+		{
+			/* store null-byte */
+			LLVMBuildStore(b,
+						   l_int8_const(1),
+						   LLVMBuildGEP(b, v_tts_nulls, &l_attno, 1, ""));
+			/* store zero datum */
+			LLVMBuildStore(b,
+						   l_sizet_const(0),
+						   LLVMBuildGEP(b, v_tts_values, &l_attno, 1, ""));
+			LLVMBuildBr(b, b_next);
+		}
 
 		LLVMPositionBuilderAtEnd(b, attnullsaveblocks[attnum]);
 		{
@@ -1148,6 +1106,7 @@ slot_compile_deform_mem_tuple(LLVMJitContext *context, TupleDesc desc,
 						   v_currbytep);
 			LLVMBuildBr(b, attnullsaveblocks[attnum]);
 		}
+
 		LLVMPositionBuilderAtEnd(b, attnullsaveendblocks[attnum]);
 		{
 			LLVMValueRef v_tmp;
@@ -1174,94 +1133,118 @@ slot_compile_deform_mem_tuple(LLVMJitContext *context, TupleDesc desc,
 		LLVMPositionBuilderAtEnd(b, attgetdataptrblocks[attnum]);
 		{
 			LLVMValueRef v_nullsave = LLVMBuildLoad(b, v_nullsavep, "");
+			LLVMValueRef v_offset =
+				l_load_struct_gep(b, v_attrbindp, FIELDNO_MEMTUPLEATTRBINDING_OFFSET, "offset");
 			LLVMBuildStore(b, LLVMBuildSub(b, v_offset, v_nullsave, ""), v_offp);
 
-			LLVMValueRef v_nullbmsize = LLVMBuildLoad(b, v_nullbmextrasizep, "");
+			LLVMValueRef v_nullbmsize = LLVMBuildSelect(b, 
+														v_hasnulls,
+														l_load_struct_gep(b,
+																		  v_bindingp,
+																		  FIELDNO_MEMTUPLEBINDING_NULLBITMAPEXTRASIZE,
+																		  ""),
+														l_int32_const(0),
+														"");
+
 			v_start = LLVMBuildGEP(b, v_tuplep, &v_nullbmsize, 1, "startp");
+
 			if (att->attlen > 0)
+			{
 				LLVMBuildBr(b, attfetchblocks[attnum]);
+				LLVMPositionBuilderAtEnd(b, attgetdataptr2blocks[attnum]);
+				LLVMBuildBr(b, attfetchblocks[attnum]);
+				LLVMPositionBuilderAtEnd(b, attgetdataptr4blocks[attnum]);
+				LLVMBuildBr(b, attfetchblocks[attnum]);
+			}
 			else
+			{
+				LLVMValueRef v_len =
+					l_load_struct_gep(b, v_attrbindp, FIELDNO_MEMTUPLEATTRBINDING_LEN, "len");
 				LLVMBuildCondBr(b,
 								LLVMBuildICmp(b, LLVMIntEQ, v_len, l_int32_const(2), ""),
 								attgetdataptr2blocks[attnum],
 								attgetdataptr4blocks[attnum]);
-		}
+				LLVMPositionBuilderAtEnd(b, attgetdataptr2blocks[attnum]);
+				{
+					LLVMValueRef v_tmp_off = LLVMBuildLoad(b, v_offp, "");
 
-		LLVMPositionBuilderAtEnd(b, attgetdataptr2blocks[attnum]);
-		{
-			LLVMValueRef v_tmp_off = LLVMBuildLoad(b, v_offp, "");
+					v_tmp_off = LLVMBuildPointerCast(b,
+													 LLVMBuildGEP(b, v_start, &v_tmp_off, 1, ""),
+													 l_ptr(LLVMInt16Type()),
+													 "");
+					v_tmp_off = LLVMBuildLoad(b, v_tmp_off, "");
+					v_tmp_off = LLVMBuildZExt(b, v_tmp_off, LLVMInt32Type(), "");
+					LLVMBuildStore(b, v_tmp_off, v_offp);
+					LLVMBuildBr(b, attfetchblocks[attnum]);
+				}
 
-			v_tmp_off = LLVMBuildPointerCast(b,
-											 LLVMBuildGEP(b, v_start, &v_tmp_off, 1, ""),
-											 l_ptr(LLVMInt16Type()),
-											 "");
-			v_tmp_off = LLVMBuildLoad(b, v_tmp_off, "");
-			v_tmp_off = LLVMBuildZExt(b, v_tmp_off, LLVMInt32Type(), "");
-			LLVMBuildStore(b, v_tmp_off, v_offp);
+				LLVMPositionBuilderAtEnd(b, attgetdataptr4blocks[attnum]);
+				{
+					LLVMValueRef v_tmp_off = LLVMBuildLoad(b, v_offp, "");
+					v_tmp_off = LLVMBuildPointerCast(b,
+													 LLVMBuildGEP(b, v_start, &v_tmp_off, 1, ""),
+													 l_ptr(LLVMInt32Type()),
+													 "");
+					v_tmp_off = LLVMBuildLoad(b, v_tmp_off, "");
+					LLVMBuildStore(b, v_tmp_off, v_offp);
+					LLVMBuildBr(b, attfetchblocks[attnum]);
+				}
+			}
 		}
-		LLVMBuildBr(b, attfetchblocks[attnum]);
-
-		LLVMPositionBuilderAtEnd(b, attgetdataptr4blocks[attnum]);
-		{
-			LLVMValueRef v_tmp_off = LLVMBuildLoad(b, v_offp, "");
-			v_tmp_off = LLVMBuildPointerCast(b,
-											 LLVMBuildGEP(b, v_start, &v_tmp_off, 1, ""),
-											 l_ptr(LLVMInt32Type()),
-											 "");
-			v_tmp_off = LLVMBuildLoad(b, v_tmp_off, "");
-			LLVMBuildStore(b, v_tmp_off, v_offp);
-		}
-		LLVMBuildBr(b, attfetchblocks[attnum]);
 
 		LLVMPositionBuilderAtEnd(b, attfetchblocks[attnum]);
-		v_off = LLVMBuildLoad(b, v_offp, "");
-		v_attdatap = LLVMBuildGEP(b, v_start, &v_off, 1, "");
-
-		/* store null-byte (false) */
-		LLVMBuildStore(b, l_int8_const(0),
-					   LLVMBuildGEP(b, v_tts_nulls, &l_attno, 1, ""));
-
-		/* compute address to store value at */
-		v_resultp = LLVMBuildGEP(b, v_tts_values, &l_attno, 1, "resultp");
-
-		/*
-		* Store datum. For byval: datums copy the value, extend to Datum's
-		* width, and store. For byref types: store pointer to data.
-		*/
-		if (att->attbyval)
 		{
-			LLVMValueRef v_tmp_loaddata;
+			v_off = LLVMBuildLoad(b, v_offp, "");
+			v_attdatap = LLVMBuildGEP(b, v_start, &v_off, 1, "");
 
-			v_tmp_loaddata =
-				LLVMBuildPointerCast(b, v_attdatap, LLVMPointerType(LLVMIntType(att->attlen * 8), 0), "");
-			v_tmp_loaddata = LLVMBuildLoad(b, v_tmp_loaddata, "attr_byval");
-			v_tmp_loaddata = LLVMBuildZExt(b, v_tmp_loaddata, TypeSizeT, "");
+			/* store null-byte (false) */
+			LLVMBuildStore(b, l_int8_const(0),
+						   LLVMBuildGEP(b, v_tts_nulls, &l_attno, 1, ""));
 
-			LLVMBuildStore(b, v_tmp_loaddata, v_resultp);
+			/* compute address to store value at */
+			v_resultp = LLVMBuildGEP(b, v_tts_values, &l_attno, 1, "resultp");
+
+			/*
+			* Store datum. For byval: datums copy the value, extend to Datum's
+			* width, and store. For byref types: store pointer to data.
+			*/
+			if (att->attbyval)
+			{
+				LLVMValueRef v_tmp_loaddata;
+
+				v_tmp_loaddata =
+					LLVMBuildPointerCast(b, v_attdatap, LLVMPointerType(LLVMIntType(att->attlen * 8), 0), "");
+				v_tmp_loaddata = LLVMBuildLoad(b, v_tmp_loaddata, "attr_byval");
+				v_tmp_loaddata = LLVMBuildZExt(b, v_tmp_loaddata, TypeSizeT, "");
+
+				LLVMBuildStore(b, v_tmp_loaddata, v_resultp);
+			}
+			else
+			{
+				LLVMValueRef v_tmp_loaddata;
+
+				/* store pointer */
+				v_tmp_loaddata =
+					LLVMBuildPtrToInt(b,
+									  v_attdatap,
+									  TypeSizeT,
+									  "attr_ptr");
+				LLVMBuildStore(b, v_tmp_loaddata, v_resultp);
+			}
+			LLVMBuildBr(b, b_next);
 		}
-		else
-		{
-			LLVMValueRef v_tmp_loaddata;
-
-			/* store pointer */
-			v_tmp_loaddata =
-				LLVMBuildPtrToInt(b,
-								  v_attdatap,
-								  TypeSizeT,
-								  "attr_ptr");
-			LLVMBuildStore(b, v_tmp_loaddata, v_resultp);
-		}
-		LLVMBuildBr(b, b_next);
 	}
 
 	LLVMPositionBuilderAtEnd(b, b_getmissingattrs);
-	LLVMValueRef v_params[3];
-	v_params[0] = v_slot;
-	v_params[1] = v_bindnatts;
-	v_params[2] = l_int32_const(natts);
-	LLVMBuildCall(b, llvm_get_decl(mod, FuncSlotGetmissingattrs),
-				  v_params, lengthof(v_params), "");
-	LLVMBuildBr(b, b_out);
+	{
+		LLVMValueRef v_params[3];
+		v_params[0] = v_slot;
+		v_params[1] = v_bindnatts;
+		v_params[2] = l_int32_const(natts);
+		LLVMBuildCall(b, llvm_get_decl(mod, FuncSlotGetmissingattrs),
+					  v_params, lengthof(v_params), "");
+		LLVMBuildBr(b, b_out);
+	}
 
 	LLVMPositionBuilderAtEnd(b, b_out);
 	LLVMBuildStore(b, l_int16_const(natts), v_nvalidp);

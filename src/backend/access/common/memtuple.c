@@ -817,7 +817,7 @@ memtuple_form_to(MemTupleBinding *pbind,
 	return mtup;
 }
 
-static Datum memtuple_getattr_by_alignment(MemTuple mtup, MemTupleBinding *pbind, int attnum, bool *isnull)
+Datum memtuple_getattr(MemTuple mtup, MemTupleBinding *pbind, int attnum, bool *isnull)
 {
 	bool hasnull = memtuple_get_hasnull(mtup);
 	unsigned char *nullp = hasnull ? memtuple_get_nullp(mtup) : NULL; 
@@ -853,28 +853,26 @@ static Datum memtuple_getattr_by_alignment(MemTuple mtup, MemTupleBinding *pbind
 	return ret;
 }
 
-Datum memtuple_getattr(MemTuple mtup, MemTupleBinding *pbind, int attnum, bool *isnull)
-{
-	return memtuple_getattr_by_alignment(mtup, pbind, attnum, isnull);
-}
-
 /*
- * Get as many attribute values as indicated in the binding.
+ * Get natts attribute values from the memtuple.
  * If there are missing attributes, get the rest from catalog.
  */
-static void memtuple_get_values(MemTuple mtup, MemTupleBinding *pbind, Datum *datum, bool *isnull)
+void memtuple_get_values(MemTuple mtup, MemTupleBinding *pbind, Datum *datum, bool *isnull, int natts)
 {
 	int i;
-	for(i=0; i<pbind->natts; ++i)
-		datum[i] = memtuple_getattr_by_alignment(mtup, pbind, i+1, &isnull[i]);
-	/* read the missing ones, if any */
-	for (; i<pbind->tupdesc->natts; ++i)
-		datum[i] = getmissingattr(pbind->tupdesc, i+1, &isnull[i]);
+	for (i = 0; i < natts; ++i)
+	{
+		if (i < pbind->natts)
+			datum[i] = memtuple_getattr(mtup, pbind, i+1, &isnull[i]);
+		else
+			/* read the missing ones, if any */
+			datum[i] = getmissingattr(pbind->tupdesc, i+1, &isnull[i]);
+	}
 }
 
 void memtuple_deform(MemTuple mtup, MemTupleBinding *pbind, Datum *datum, bool *isnull)
 {
-	memtuple_get_values(mtup, pbind, datum, isnull);
+	memtuple_get_values(mtup, pbind, datum, isnull, pbind->tupdesc->natts);
 }
 
 bool MemTupleHasExternal(MemTuple mtup, MemTupleBinding *pbind)

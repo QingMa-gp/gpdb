@@ -881,6 +881,10 @@ select count(*) from fix_ao_truncate_last_sequence;
 abort;
 
 -- test for AO tuple deform in JIT
+-- start_matchsubs
+-- m/\(cost=.*\)/
+-- s/\(cost=.*\)//
+-- end_matchsubs
 SET jit = on;
 SET jit_above_cost = 0;
 SET gp_explain_jit = on;
