@@ -825,7 +825,7 @@ slot_compile_deform_mem_tuple(LLVMJitContext *context, TupleDesc desc,
 	LLVMValueRef v_start;
 	LLVMValueRef v_colbindp;
 	LLVMValueRef v_attrbinds;
-	LLVMValueRef v_nullsavesp;
+	LLVMValueRef v_nullsaves;
 
 	int attnum;
 	mod = llvm_mutable_module(context);
@@ -954,8 +954,8 @@ slot_compile_deform_mem_tuple(LLVMJitContext *context, TupleDesc desc,
 
 	v_attrbinds =
 		l_load_struct_gep(b, v_colbindp, FIELDNO_MEMTUPLEBINDINGCOLS_BINDINGS, "attrbinds");
-	v_nullsavesp =
-		LLVMBuildStructGEP(b, v_colbindp, FIELDNO_MEMTUPLEBINDINGCOLS_NULLSAVES, "null_saves");	
+	v_nullsaves =
+		l_load_struct_gep(b, v_colbindp, FIELDNO_MEMTUPLEBINDINGCOLS_NULLSAVES, "null_saves");	
 	LLVMBuildBr(b, b_find_start);
 
 	LLVMPositionBuilderAtEnd(b, b_find_start);
@@ -1009,6 +1009,7 @@ slot_compile_deform_mem_tuple(LLVMJitContext *context, TupleDesc desc,
 		LLVMValueRef v_offp;
 		LLVMValueRef v_off;
 
+		LLVMValueRef v_nullsavesp;
 		b_ifnull = attisnullblocks[attnum];
 
 		if (attnum + 1 == natts)
@@ -1034,6 +1035,9 @@ slot_compile_deform_mem_tuple(LLVMJitContext *context, TupleDesc desc,
 			LLVMBuildStore(b, l_int32_const(0), v_offp);
 			v_nullsavep = LLVMBuildAlloca(b, LLVMInt32Type(), "");
 			LLVMBuildStore(b, l_int32_const(0), v_nullsavep);
+
+			v_nullsavesp = LLVMBuildAlloca(b, l_ptr(LLVMInt16Type()), "");
+			LLVMBuildStore(b, v_nullsaves, v_nullsavesp);
 
 			v_attrbindp = LLVMBuildGEP(b, v_attrbinds, &l_attno, 1, "attrbind");
 			v_nullbyteno =
@@ -1084,20 +1088,19 @@ slot_compile_deform_mem_tuple(LLVMJitContext *context, TupleDesc desc,
 			LLVMValueRef v_tmp;
 			LLVMValueRef v_bit, v_low, v_high, v_nullsave_l, v_nullsave_h;
 			LLVMValueRef v_nullsave = LLVMBuildLoad(b, v_nullsavep, "");
-			LLVMValueRef v_nullsaves = LLVMBuildLoad(b, v_nullsavesp, "");
+			LLVMValueRef v_curr_ns = LLVMBuildLoad(b, v_nullsavesp, "");
 			LLVMValueRef v_currbyte = LLVMBuildLoad(b, v_currbytep, "");
 
 			v_bit = l_load_gep1(b, v_tupledatap, v_currbyte, "");
 			v_low = LLVMBuildAnd(b, v_bit, l_int8_const(0xf), "");
 			v_high = LLVMBuildLShr(b, v_bit, l_int8_const(4), "");
 			v_high = LLVMBuildAdd(b, v_high, l_int8_const(16), "");
-			v_nullsave_l = l_load_gep1(b, v_nullsaves, v_low, "");
-			v_nullsave_h = l_load_gep1(b, v_nullsaves, v_high, "");
+			v_nullsave_l = l_load_gep1(b, v_curr_ns, v_low, "");
+			v_nullsave_h = l_load_gep1(b, v_curr_ns, v_high, "");
 			v_tmp = LLVMBuildZExt(b, LLVMBuildAdd(b, v_nullsave_l, v_nullsave_h, ""), LLVMInt32Type(), "");
 			LLVMBuildStore(b, LLVMBuildAdd(b, v_nullsave, v_tmp, ""), v_nullsavep);
-			LLVMValueRef v_tmp1 = l_sizet_const(32);
-			LLVMBuildStore(b, LLVMBuildGEP(b, v_nullsaves, &v_tmp1, 1, ""), v_nullsavesp);
-
+			LLVMValueRef v_offset = l_sizet_const(32);
+			LLVMBuildStore(b, LLVMBuildGEP(b, v_curr_ns, &v_offset, 1, ""), v_nullsavesp);
 			LLVMBuildStore(b, 
 						   LLVMBuildAdd(b,
 										v_currbyte,
@@ -1112,7 +1115,7 @@ slot_compile_deform_mem_tuple(LLVMJitContext *context, TupleDesc desc,
 			LLVMValueRef v_tmp;
 			LLVMValueRef v_bit, v_blow, v_high, v_nullsave_b, v_nullsave_h;
 			LLVMValueRef v_nullsave = LLVMBuildLoad(b, v_nullsavep, "");
-			LLVMValueRef v_nullsaves = LLVMBuildLoad(b, v_nullsavesp, "");
+			LLVMValueRef v_curr_ns = LLVMBuildLoad(b, v_nullsavesp, "");
 			v_bit = LLVMBuildAnd(b,
 								 v_nullbyte,
 								 LLVMBuildSub(b,
@@ -1123,8 +1126,8 @@ slot_compile_deform_mem_tuple(LLVMJitContext *context, TupleDesc desc,
 			v_blow = LLVMBuildAnd(b, v_bit, l_int8_const(0xf), "");
 			v_high = LLVMBuildLShr(b, v_bit, l_int8_const(4), "");
 			v_high = LLVMBuildAdd(b, v_high, l_int8_const(16), "");
-			v_nullsave_b = l_load_gep1(b, v_nullsaves, v_blow, "");
-			v_nullsave_h = l_load_gep1(b, v_nullsaves, v_high, "");
+			v_nullsave_b = l_load_gep1(b, v_curr_ns, v_blow, "");
+			v_nullsave_h = l_load_gep1(b, v_curr_ns, v_high, "");
 			v_tmp = LLVMBuildZExt(b, LLVMBuildAdd(b, v_nullsave_b, v_nullsave_h, ""), LLVMInt32Type(), "");
 			LLVMBuildStore(b, LLVMBuildAdd(b, v_nullsave, v_tmp, ""), v_nullsavep);
 			LLVMBuildBr(b, attgetdataptrblocks[attnum]);
