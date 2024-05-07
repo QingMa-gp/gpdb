@@ -854,25 +854,22 @@ Datum memtuple_getattr(MemTuple mtup, MemTupleBinding *pbind, int attnum, bool *
 }
 
 /*
- * Get natts attribute values from the memtuple.
+ * Get as many attribute values as indicated in the binding.
  * If there are missing attributes, get the rest from catalog.
  */
-void memtuple_get_values(MemTuple mtup, MemTupleBinding *pbind, Datum *datum, bool *isnull, int natts)
+static void memtuple_get_values(MemTuple mtup, MemTupleBinding *pbind, Datum *datum, bool *isnull)
 {
 	int i;
-	for (i = 0; i < natts; ++i)
-	{
-		if (i < pbind->natts)
-			datum[i] = memtuple_getattr(mtup, pbind, i+1, &isnull[i]);
-		else
-			/* read the missing ones, if any */
-			datum[i] = getmissingattr(pbind->tupdesc, i+1, &isnull[i]);
-	}
+	for (i = 0; i < pbind->natts; ++i)
+		datum[i] = memtuple_getattr(mtup, pbind, i+1, &isnull[i]);
+	/* read the missing ones, if any */
+	for (; i < pbind->tupdesc->natts; ++i)
+		datum[i] = getmissingattr(pbind->tupdesc, i+1, &isnull[i]); 
 }
 
 void memtuple_deform(MemTuple mtup, MemTupleBinding *pbind, Datum *datum, bool *isnull)
 {
-	memtuple_get_values(mtup, pbind, datum, isnull, pbind->tupdesc->natts);
+	memtuple_get_values(mtup, pbind, datum, isnull);
 }
 
 bool MemTupleHasExternal(MemTuple mtup, MemTupleBinding *pbind)

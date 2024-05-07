@@ -1228,9 +1228,22 @@ slot_deform_mem_tuple(TupleTableSlot *slot, int natts)
 	MemTuple tuple = mslot->tuple;
 	MemTupleBinding *pbind = mslot->mt_bind;
 
+	/*
+	 * A memtuple binding usually has slot->tts_tupleDescriptor->natts number of attributes,
+	 * but there are cases (like missing attributes) where it may have lesser than that.
+	 */
+	Assert(mslot->mt_bind->natts <= slot->tts_tupleDescriptor->natts);
+
 	/* We can only fetch as many attributes as the tuple has. */
 	natts = Min(slot->tts_tupleDescriptor->natts, natts);
-	memtuple_get_values(tuple, pbind, slot->tts_values, slot->tts_isnull, natts);
+
+	for (; attnum < natts; ++attnum)
+	{
+		if (attnum < pbind->natts)
+			slot->tts_values[attnum] = memtuple_getattr(tuple, pbind, attnum + 1, &isnull[attnum]);
+		else
+			slot->tts_values[attnum] = getmissingattr(pbind->tupdesc, attnum + 1, &isnull[attnum]);
+	}
 
 	/* Save state for next execution. */
 	slot->tts_nvalid = natts;
